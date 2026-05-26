@@ -31,7 +31,7 @@ def _row_to_subscription(row) -> dict:
         "status": row["status"],
         "first_seen": _parse_dt(row["first_seen"]),
         "last_seen": _parse_dt(row["last_seen"]),
-        "source": row["source"],
+        "source_provider": row["source_provider"],
     }
 
 
@@ -39,6 +39,9 @@ def _row_to_record(row) -> dict:
     return {
         "record_id": row["record_id"],
         "subscription_id": row["subscription_id"],
+        "source_provider": row["source_provider"],
+        "source_account_id": row["source_account_id"],
+        "source_account_email": row["source_account_email"],
         "sender_address": row["sender_address"],
         "sender_name": row["sender_name"],
         "subject": row["subject"],

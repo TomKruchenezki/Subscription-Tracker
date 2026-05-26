@@ -42,7 +42,7 @@ _CATEGORY_MAP = {
 
 @dataclass
 class DetectionResult:
-    message_id: str
+    source_message_id: str
     disposition: str
     confidence_score: float
     subscription_id: str | None
@@ -79,7 +79,7 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     disposition = score_to_disposition(score, AUTO_DETECT_THRESHOLD, REVIEW_THRESHOLD)
 
     logger.info("Processed %s: score=%.2f disposition=%s name=%s",
-                email.message_id, score, disposition, canonical_name)
+                email.source_message_id, score, disposition, canonical_name)
 
     subscription_id: str | None = None
 
@@ -106,12 +106,15 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
                 billing_cycle=billing_cycle,
                 category=category,
                 status=status,
-                source=email.source,
+                source_provider=email.source_provider,
             )
 
         insert_email_record(
             conn,
-            gmail_message_id=email.message_id,
+            source_message_id=email.source_message_id,
+            source_provider=email.source_provider,
+            source_account_id=email.source_account_id,
+            source_account_email=email.source_account_email,
             subscription_id=subscription_id,
             sender_address=email.sender_address,
             sender_name=email.sender_name,
@@ -127,7 +130,10 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     elif disposition == "FLAGGED":
         insert_email_record(
             conn,
-            gmail_message_id=email.message_id,
+            source_message_id=email.source_message_id,
+            source_provider=email.source_provider,
+            source_account_id=email.source_account_id,
+            source_account_email=email.source_account_email,
             subscription_id=None,
             sender_address=email.sender_address,
             sender_name=email.sender_name,
@@ -143,7 +149,7 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     # IGNORED: nothing stored
 
     return DetectionResult(
-        message_id=email.message_id,
+        source_message_id=email.source_message_id,
         disposition=disposition,
         confidence_score=score,
         subscription_id=subscription_id,

@@ -22,9 +22,11 @@ def test_schema_version_exists(conn):
 def test_valid_disposition_constraint(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO email_records (record_id, gmail_message_id, sender_address, "
+            "INSERT INTO email_records (record_id, source_message_id, source_provider, "
+            "source_account_id, source_account_email, sender_address, "
             "subject, email_date, confidence_score, disposition) "
-            "VALUES ('r1', 'g1', 'a@b.com', 'Test', '2025-01-01T00:00:00Z', 0.5, 'INVALID')"
+            "VALUES ('r1', 's1', 'MOCK', 'mock_default', 'demo@mock.local', "
+            "'a@b.com', 'Test', '2025-01-01T00:00:00Z', 0.5, 'INVALID')"
         )
         conn.commit()
 
@@ -32,9 +34,11 @@ def test_valid_disposition_constraint(conn):
 def test_subject_length_constraint(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO email_records (record_id, gmail_message_id, sender_address, "
+            "INSERT INTO email_records (record_id, source_message_id, source_provider, "
+            "source_account_id, source_account_email, sender_address, "
             "subject, email_date, confidence_score, disposition) "
-            "VALUES ('r2', 'g2', 'a@b.com', ?, '2025-01-01T00:00:00Z', 0.5, 'DETECTED')",
+            "VALUES ('r2', 's2', 'MOCK', 'mock_default', 'demo@mock.local', "
+            "'a@b.com', ?, '2025-01-01T00:00:00Z', 0.5, 'DETECTED')",
             ("x" * 501,),
         )
         conn.commit()
@@ -43,9 +47,11 @@ def test_subject_length_constraint(conn):
 def test_valid_confidence_constraint(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO email_records (record_id, gmail_message_id, sender_address, "
+            "INSERT INTO email_records (record_id, source_message_id, source_provider, "
+            "source_account_id, source_account_email, sender_address, "
             "subject, email_date, confidence_score, disposition) "
-            "VALUES ('r3', 'g3', 'a@b.com', 'Test', '2025-01-01T00:00:00Z', 1.5, 'DETECTED')"
+            "VALUES ('r3', 's3', 'MOCK', 'mock_default', 'demo@mock.local', "
+            "'a@b.com', 'Test', '2025-01-01T00:00:00Z', 1.5, 'DETECTED')"
         )
         conn.commit()
 
@@ -53,14 +59,16 @@ def test_valid_confidence_constraint(conn):
 def test_cascade_delete(conn):
     sub_id = upsert_subscription(
         conn, name="TestService", amount=9.99, currency="USD",
-        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE", source="MOCK",
+        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE", source_provider="MOCK",
     )
     conn.commit()
     insert_email_record(
-        conn, gmail_message_id="gm1", subscription_id=sub_id,
-        sender_address="a@b.com", sender_name=None, subject="Test receipt",
-        email_date="2025-01-01T00:00:00Z", amount_extracted=9.99,
-        currency_extracted="USD", confidence_score=0.9, disposition="DETECTED",
+        conn, source_message_id="sm1", source_provider="MOCK",
+        source_account_id="mock_default", source_account_email="demo@mock.local",
+        subscription_id=sub_id, sender_address="a@b.com", sender_name=None,
+        subject="Test receipt", email_date="2025-01-01T00:00:00Z",
+        amount_extracted=9.99, currency_extracted="USD",
+        confidence_score=0.9, disposition="DETECTED",
     )
     conn.commit()
 
@@ -77,12 +85,12 @@ def test_cascade_delete(conn):
 def test_upsert_subscription_idempotent(conn):
     upsert_subscription(
         conn, name="Netflix", amount=15.49, currency="USD",
-        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source="MOCK",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source_provider="MOCK",
     )
     conn.commit()
     upsert_subscription(
         conn, name="Netflix", amount=17.99, currency="USD",
-        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source="MOCK",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source_provider="MOCK",
     )
     conn.commit()
 
@@ -94,23 +102,27 @@ def test_upsert_subscription_idempotent(conn):
 def test_dedup_email_record(conn):
     sub_id = upsert_subscription(
         conn, name="Spotify", amount=9.99, currency="USD",
-        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source="MOCK",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE", source_provider="MOCK",
     )
     conn.commit()
     first = insert_email_record(
-        conn, gmail_message_id="spotify_001", subscription_id=sub_id,
-        sender_address="a@b.com", sender_name=None, subject="Spotify receipt",
-        email_date="2025-01-01T00:00:00Z", amount_extracted=9.99,
-        currency_extracted="USD", confidence_score=0.9, disposition="DETECTED",
+        conn, source_message_id="spotify_001", source_provider="MOCK",
+        source_account_id="mock_default", source_account_email="demo@mock.local",
+        subscription_id=sub_id, sender_address="a@b.com", sender_name=None,
+        subject="Spotify receipt", email_date="2025-01-01T00:00:00Z",
+        amount_extracted=9.99, currency_extracted="USD",
+        confidence_score=0.9, disposition="DETECTED",
     )
     conn.commit()
     second = insert_email_record(
-        conn, gmail_message_id="spotify_001", subscription_id=sub_id,
-        sender_address="a@b.com", sender_name=None, subject="Spotify receipt",
-        email_date="2025-01-01T00:00:00Z", amount_extracted=9.99,
-        currency_extracted="USD", confidence_score=0.9, disposition="DETECTED",
+        conn, source_message_id="spotify_001", source_provider="MOCK",
+        source_account_id="mock_default", source_account_email="demo@mock.local",
+        subscription_id=sub_id, sender_address="a@b.com", sender_name=None,
+        subject="Spotify receipt", email_date="2025-01-01T00:00:00Z",
+        amount_extracted=9.99, currency_extracted="USD",
+        confidence_score=0.9, disposition="DETECTED",
     )
     conn.commit()
     assert first is not None
-    assert second is None, "Duplicate gmail_message_id must return None (dedup)"
+    assert second is None, "Duplicate source_message_id must return None (dedup)"
     assert len(get_email_records(conn)) == 1

@@ -51,7 +51,7 @@ export function SubscriptionTable({ subscriptions }: Props) {
               <span className={`badge badge-${sub.status.toLowerCase()}`}>{sub.status}</span>
             </td>
             <td>
-              <span className={`badge badge-${sub.source.toLowerCase()}`}>{sub.source}</span>
+              <span className={`badge badge-${sub.source_provider.toLowerCase()}`}>{sub.source_provider}</span>
             </td>
             <td style={{ color: "var(--muted)" }}>{new Date(sub.last_seen).toLocaleDateString()}</td>
           </tr>

@@ -32,7 +32,7 @@ def init_db(db_path: str) -> None:
 
 def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | None,
                          currency: str, billing_cycle: str, category: str,
-                         status: str, source: str, service_url: str | None = None,
+                         status: str, source_provider: str, service_url: str | None = None,
                          next_renewal: str | None = None) -> str:
     """Insert or update a subscription by canonical name. Returns subscription_id."""
     now = _now()
@@ -59,11 +59,11 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
         conn.execute(
             """INSERT INTO subscriptions
                (subscription_id, name, service_url, amount, currency, billing_cycle,
-                next_renewal, category, status, first_seen, last_seen, source,
+                next_renewal, category, status, first_seen, last_seen, source_provider,
                 created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (sub_id, name, service_url, amount, currency, billing_cycle,
-             next_renewal, category, status, now, now, source, now, now),
+             next_renewal, category, status, now, now, source_provider, now, now),
         )
     return sub_id
 
@@ -92,15 +92,17 @@ def get_subscription_by_id(conn: sqlite3.Connection, subscription_id: str) -> sq
 
 # ── Email records ────────────────────────────────────────────────────────────
 
-def insert_email_record(conn: sqlite3.Connection, *, gmail_message_id: str,
-                         subscription_id: str | None, sender_address: str,
-                         sender_name: str | None, subject: str, email_date: str,
-                         amount_extracted: float | None, currency_extracted: str | None,
-                         confidence_score: float, disposition: str) -> str | None:
-    """Insert an email record. Returns None if message_id already exists (dedup)."""
+def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
+                         source_provider: str, source_account_id: str,
+                         source_account_email: str, subscription_id: str | None,
+                         sender_address: str, sender_name: str | None, subject: str,
+                         email_date: str, amount_extracted: float | None,
+                         currency_extracted: str | None, confidence_score: float,
+                         disposition: str) -> str | None:
+    """Insert an email record. Returns None if source_message_id already exists (dedup)."""
     existing = conn.execute(
-        "SELECT record_id FROM email_records WHERE gmail_message_id = ?",
-        (gmail_message_id,),
+        "SELECT record_id FROM email_records WHERE source_message_id = ?",
+        (source_message_id,),
     ).fetchone()
     if existing:
         return None
@@ -109,25 +111,32 @@ def insert_email_record(conn: sqlite3.Connection, *, gmail_message_id: str,
     now = _now()
     conn.execute(
         """INSERT INTO email_records
-           (record_id, subscription_id, gmail_message_id, sender_address, sender_name,
+           (record_id, subscription_id, source_message_id, source_provider,
+            source_account_id, source_account_email, sender_address, sender_name,
             subject, email_date, amount_extracted, currency_extracted,
             confidence_score, disposition, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (record_id, subscription_id, gmail_message_id, sender_address, sender_name,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (record_id, subscription_id, source_message_id, source_provider,
+         source_account_id, source_account_email, sender_address, sender_name,
          subject, email_date, amount_extracted, currency_extracted,
          confidence_score, disposition, now),
     )
     return record_id
 
 
-def get_email_records(conn: sqlite3.Connection, disposition: str | None = None) -> list[sqlite3.Row]:
+def get_email_records(conn: sqlite3.Connection, disposition: str | None = None,
+                       account_id: str | None = None) -> list[sqlite3.Row]:
+    conditions = []
+    params: list = []
     if disposition:
-        return conn.execute(
-            "SELECT * FROM email_records WHERE disposition = ? ORDER BY email_date DESC",
-            (disposition,),
-        ).fetchall()
+        conditions.append("disposition = ?")
+        params.append(disposition)
+    if account_id:
+        conditions.append("source_account_id = ?")
+        params.append(account_id)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
-        "SELECT * FROM email_records ORDER BY email_date DESC"
+        f"SELECT * FROM email_records {where} ORDER BY email_date DESC", params
     ).fetchall()
 
 

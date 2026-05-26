@@ -10,12 +10,14 @@ from backend.db.setup import get_subscriptions, get_email_records
 
 def _make_email(message_id, sender, subject, date_str="2025-05-01T08:00:00Z"):
     return EmailMetadata(
-        message_id=message_id,
+        source_message_id=message_id,
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        source_account_email="demo@mock.local",
         sender_address=sender,
         sender_name=None,
         subject=subject,
         email_date=datetime.fromisoformat(date_str.replace("Z", "+00:00")),
-        source="MOCK",
     )
 
 
@@ -42,9 +44,9 @@ def test_duplicate_message_id_not_double_stored(conn):
     email = _make_email("t002", "billing@account.netflix.com",
                         "Your Netflix receipt - $15.49")
     process_email(conn, email)
-    process_email(conn, email)  # same message_id
+    process_email(conn, email)  # same source_message_id
     records = get_email_records(conn)
-    assert len(records) == 1, "Duplicate message_id must not create a second email_record"
+    assert len(records) == 1, "Duplicate source_message_id must not create a second email_record"
 
 
 def test_cancellation_updates_subscription_status(conn):

@@ -15,12 +15,15 @@ class SubscriptionResponse(BaseModel):
     status: Literal["ACTIVE", "CANCELLED", "PAUSED"]
     first_seen: datetime
     last_seen: datetime
-    source: Literal["MOCK", "GMAIL"]
+    source_provider: str
 
 
 class EmailRecordResponse(BaseModel):
     record_id: str
     subscription_id: str | None
+    source_provider: str
+    source_account_id: str
+    source_account_email: str
     sender_address: str
     sender_name: str | None
     subject: str
