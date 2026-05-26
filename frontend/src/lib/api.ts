@@ -1,4 +1,4 @@
-import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary } from "@/types/api";
+import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount } from "@/types/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -14,6 +14,8 @@ export const api = {
   health: () => apiFetch<{ status: string; mode: string; version: string }>("/api/health"),
   scan: (request?: ScanRequest) => {
     const params = new URLSearchParams();
+    if (request?.mode) params.set("mode", request.mode);
+    if (request?.scan_range) params.set("scan_range", request.scan_range);
     if (request?.date_from) params.set("date_from", request.date_from);
     if (request?.date_to) params.set("date_to", request.date_to);
     const qs = params.toString();
@@ -30,4 +32,10 @@ export const api = {
       `/api/email-records${disposition ? `?disposition=${disposition}` : ""}`
     ),
   summary: () => apiFetch<Summary>("/api/summary"),
+
+  accounts: () => apiFetch<ConnectedAccount[]>("/api/accounts"),
+  gmailAuthUrl: () =>
+    apiFetch<{ auth_url: string; state: string }>("/api/accounts/gmail/auth-url"),
+  disconnectAccount: (accountId: string) =>
+    fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" }),
 };

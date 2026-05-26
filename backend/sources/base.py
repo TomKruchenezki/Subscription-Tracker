@@ -12,6 +12,15 @@ class EmailSource(ABC):
         *,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
+        mode: str = "deep",
     ) -> list[EmailMetadata]:
-        """Fetch email metadata records, optionally filtered by date range."""
+        """Fetch email metadata records, optionally filtered by date range.
+
+        Args:
+            date_from: Only return emails on or after this datetime.
+            date_to: Only return emails on or before this datetime.
+            mode: Scan depth — "quick", "deep" (default), or "forensic".
+                  MockEmailSource ignores this; GmailEmailSource uses it to
+                  select which query passes to run.
+        """
         ...

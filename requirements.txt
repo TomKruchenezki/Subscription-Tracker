@@ -4,6 +4,12 @@ pydantic==2.10.3
 python-dotenv==1.0.1
 cryptography==44.0.0
 
+# Phase 2: Gmail OAuth and API client
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.154.0
+keyring==25.6.0
+
 # Testing (also installed separately by CI)
 pytest==8.3.4
 pytest-cov==6.0.0
+httpx>=0.27.0

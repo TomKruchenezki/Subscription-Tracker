@@ -2,11 +2,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routers import health, subscriptions, scan
+from backend.api.routers import health, subscriptions, scan, accounts
 
 app = FastAPI(
     title="Subscription Tracker API",
-    version="0.1.0",
+    version="0.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
 )
@@ -21,3 +21,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(subscriptions.router)
 app.include_router(scan.router)
+app.include_router(accounts.router)

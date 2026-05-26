@@ -247,5 +247,50 @@ def get_summary(conn: sqlite3.Connection) -> dict:
     }
 
 
+# ── Connected accounts ────────────────────────────────────────────────────────
+
+def get_connected_accounts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all active connected accounts ordered by creation date."""
+    return conn.execute(
+        "SELECT * FROM connected_accounts ORDER BY created_at"
+    ).fetchall()
+
+
+def get_connected_account(conn: sqlite3.Connection, account_id: str) -> sqlite3.Row | None:
+    """Return a single connected account by ID, or None if not found."""
+    return conn.execute(
+        "SELECT * FROM connected_accounts WHERE account_id = ?", (account_id,)
+    ).fetchone()
+
+
+def upsert_connected_account(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    source_provider: str,
+    account_email: str,
+    display_name: str | None = None,
+) -> None:
+    """Insert or update a connected account record."""
+    conn.execute(
+        """INSERT INTO connected_accounts
+               (account_id, source_provider, account_email, display_name, is_active)
+               VALUES (?, ?, ?, ?, 1)
+           ON CONFLICT(account_id) DO UPDATE SET
+               account_email = excluded.account_email,
+               display_name  = excluded.display_name,
+               is_active     = 1""",
+        (account_id, source_provider, account_email, display_name),
+    )
+
+
+def deactivate_connected_account(conn: sqlite3.Connection, account_id: str) -> None:
+    """Mark an account as inactive (disconnect). Tokens must be deleted separately."""
+    conn.execute(
+        "UPDATE connected_accounts SET is_active = 0 WHERE account_id = ?",
+        (account_id,),
+    )
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -14,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <span style={{ fontWeight: 600, color: "var(--text)" }}>Subscription Tracker</span>
           <a href="/">Dashboard</a>
           <a href="/review">Review Queue</a>
+          <a href="/accounts">Accounts</a>
         </nav>
         <main style={{ padding: "24px", maxWidth: "1200px", margin: "0 auto" }}>
           {children}

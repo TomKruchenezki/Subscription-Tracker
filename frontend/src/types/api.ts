@@ -43,7 +43,20 @@ export interface EmailRecord {
   short_evidence: string | null;
 }
 
+export interface ConnectedAccount {
+  account_id: string;
+  source_provider: SourceProvider;
+  account_email: string;
+  display_name: string | null;
+  is_active: boolean;
+}
+
+export type ScanMode = "quick" | "deep" | "forensic";
+export type ScanRange = "1m" | "3m" | "6m" | "1y" | "2y" | "5y";
+
 export interface ScanRequest {
+  mode?: ScanMode;
+  scan_range?: ScanRange;
   date_from?: string;
   date_to?: string;
 }

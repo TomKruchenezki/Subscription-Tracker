@@ -18,6 +18,7 @@ class MockEmailSource(EmailSource):
         *,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
+        mode: str = "deep",  # noqa: ARG002 — mode ignored; mock always returns all matching records
     ) -> list[EmailMetadata]:
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         emails = []

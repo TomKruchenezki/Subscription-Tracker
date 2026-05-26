@@ -89,10 +89,21 @@ def _make_short_evidence(
     return templates.get(event_type)
 
 
-def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionResult:
+def process_email(
+    conn: sqlite3.Connection,
+    email: EmailMetadata,
+    review_threshold: float | None = None,
+) -> DetectionResult:
     """
     Run the 5-stage detection pipeline for one email.
     Writes to the database and returns a DetectionResult.
+
+    Args:
+        conn: Active DB connection.
+        email: Normalised email metadata from any EmailSource.
+        review_threshold: Override the REVIEW_THRESHOLD env var for this call.
+                          Scan modes pass mode-specific thresholds (quick=0.50,
+                          deep=0.40, forensic=0.30). None → use env var default.
     """
     # Stage 1: Sender domain lookup
     domain = email.sender_address.split("@", 1)[-1].lower() if "@" in email.sender_address else email.sender_address
@@ -115,7 +126,8 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     score = compute_score(tier, pattern, amount, billing_cycle)
 
     # Stage 5: Threshold decision → disposition
-    disposition = score_to_disposition(score, AUTO_DETECT_THRESHOLD, REVIEW_THRESHOLD)
+    effective_review_threshold = review_threshold if review_threshold is not None else REVIEW_THRESHOLD
+    disposition = score_to_disposition(score, AUTO_DETECT_THRESHOLD, effective_review_threshold)
 
     logger.info("Processed %s: score=%.2f disposition=%s name=%s",
                 email.source_message_id, score, disposition, canonical_name)
