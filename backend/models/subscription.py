@@ -12,10 +12,14 @@ class SubscriptionResponse(BaseModel):
     billing_cycle: Literal["MONTHLY", "ANNUAL", "WEEKLY", "UNKNOWN"]
     next_renewal: date | None
     category: Literal["STREAMING", "SAAS", "NEWS", "CLOUD", "OTHER"]
-    status: Literal["ACTIVE", "CANCELLED", "PAUSED"]
+    status: Literal["ACTIVE", "CANCELLED", "PAUSED", "TRIAL", "UNKNOWN"]
     first_seen: datetime
     last_seen: datetime
     source_provider: str
+    first_charge_date: datetime | None
+    last_charge_date: datetime | None
+    cancelled_at: datetime | None
+    trial_ends_at: datetime | None
 
 
 class EmailRecordResponse(BaseModel):
@@ -32,6 +36,10 @@ class EmailRecordResponse(BaseModel):
     currency_extracted: str | None
     confidence_score: float
     disposition: Literal["DETECTED", "FLAGGED", "IGNORED"]
+    event_type: str | None
+    billing_period_start: datetime | None
+    billing_period_end: datetime | None
+    short_evidence: str | None
 
 
 class ScanResult(BaseModel):

@@ -2,9 +2,8 @@ import pytest
 import sqlite3
 from pathlib import Path
 
-_MIGRATIONS_SQL = (
-    Path(__file__).parent / "backend" / "db" / "migrations" / "001_initial_schema.sql"
-).read_text(encoding="utf-8")
+_MIGRATIONS_DIR = Path(__file__).parent / "backend" / "db" / "migrations"
+_MIGRATIONS = sorted(_MIGRATIONS_DIR.glob("*.sql"))
 
 
 def pytest_addoption(parser):
@@ -30,7 +29,8 @@ def db_path(tmp_path):
     path = str(tmp_path / "test.db")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(_MIGRATIONS_SQL)
+    for migration in _MIGRATIONS:
+        conn.executescript(migration.read_text(encoding="utf-8"))
     conn.commit()
     conn.close()
     return path

@@ -2,13 +2,17 @@
 Weighted confidence scoring formula → score in [0.0, 1.0].
 
 Weights:
-  Tier 1 sender:  +0.60
-  Tier 2 sender:  +0.30
+  Tier 1 sender:   +0.60
+  Tier 2 sender:   +0.30
   Receipt/invoice: +0.30
-  Renewal:        +0.25
-  Trial end:      +0.20
-  Cancellation:   +0.20
-  Promotional:    -0.30
+  Renewal:         +0.25
+  Refund:          +0.25  (implies prior billing relationship)
+  Trial end:       +0.20
+  Trial started:   +0.20
+  Cancellation:    +0.20
+  Failed payment:  +0.20
+  Price change:    +0.15  (informational, not transactional)
+  Promotional:     -0.30
   Parser (amount detected): +0.10 (capped — see note below)
   Parser (cycle detected):  +0.05 (included in same cap)
   Combined parser cap:       0.10
@@ -22,12 +26,16 @@ from backend.detector.pattern_library import PatternType
 TIER_WEIGHTS = {1: 0.60, 2: 0.30, 0: 0.00}
 
 PATTERN_WEIGHTS = {
-    PatternType.RECEIPT: 0.30,
-    PatternType.RENEWAL: 0.25,
-    PatternType.TRIAL_END: 0.20,
-    PatternType.CANCELLATION: 0.20,
-    PatternType.PROMOTIONAL: -0.30,
-    PatternType.NONE: 0.00,
+    PatternType.RECEIPT:        0.30,
+    PatternType.RENEWAL:        0.25,
+    PatternType.REFUND:         0.25,
+    PatternType.TRIAL_END:      0.20,
+    PatternType.TRIAL_STARTED:  0.20,
+    PatternType.CANCELLATION:   0.20,
+    PatternType.FAILED_PAYMENT: 0.20,
+    PatternType.PRICE_CHANGE:   0.15,
+    PatternType.PROMOTIONAL:   -0.30,
+    PatternType.NONE:           0.00,
 }
 
 _AMOUNT_DELTA = 0.10

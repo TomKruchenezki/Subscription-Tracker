@@ -66,13 +66,14 @@ def test_cancellation_updates_subscription_status(conn):
     assert netflix_subs[0]["status"] == "CANCELLED"
 
 
-def test_trial_end_creates_active_subscription(conn):
+def test_trial_end_creates_trial_subscription(conn):
+    """TRIAL_END on a brand-new subscription creates it with status=TRIAL, not ACTIVE."""
     email = _make_email("t004", "no-reply@figma.com",
                         "Your Figma Professional trial is ending soon - $15.00/month")
     result = process_email(conn, email)
     assert result.disposition == "DETECTED"
     subs = get_subscriptions(conn)
-    assert any(s["name"] == "Figma" and s["status"] == "ACTIVE" for s in subs)
+    assert any(s["name"] == "Figma" and s["status"] == "TRIAL" for s in subs)
 
 
 def test_amazon_com_not_detected(conn):
@@ -105,3 +106,106 @@ def test_flagged_email_stores_record_but_no_subscription(conn):
     records = get_email_records(conn, disposition="FLAGGED")
     assert len(records) == 1
     assert records[0]["subscription_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.2: event_type and lifecycle date tests
+# ---------------------------------------------------------------------------
+
+def test_receipt_event_type_is_subscription_started(conn):
+    """First receipt for a service → event_type 'subscription_started'."""
+    email = _make_email("t008", "billing@account.netflix.com",
+                        "Your Netflix membership receipt - $15.49")
+    result = process_email(conn, email)
+    assert result.event_type == "subscription_started"
+    records = get_email_records(conn)
+    assert records[0]["event_type"] == "subscription_started"
+
+
+def test_second_receipt_is_renewal_charge(conn):
+    """Second receipt for the same service → event_type 'renewal_charge'."""
+    first = _make_email("t009a", "billing@account.netflix.com",
+                        "Your Netflix membership receipt - $15.49", "2025-04-01T08:00:00Z")
+    second = _make_email("t009b", "billing@account.netflix.com",
+                         "Your Netflix membership receipt - $15.49", "2025-05-01T08:00:00Z")
+    process_email(conn, first)
+    result = process_email(conn, second)
+    assert result.event_type == "renewal_charge"
+    records = get_email_records(conn)
+    renewal_records = [r for r in records if r["event_type"] == "renewal_charge"]
+    assert len(renewal_records) == 1
+
+
+def test_cancellation_sets_cancelled_at(conn):
+    """Processing a cancellation email populates cancelled_at on the subscription row."""
+    receipt = _make_email("t010a", "billing@account.netflix.com",
+                          "Your Netflix receipt - $15.49", "2025-04-01T08:00:00Z")
+    cancel = _make_email("t010b", "billing@account.netflix.com",
+                         "Your Netflix subscription has been cancelled", "2025-05-01T08:00:00Z")
+    process_email(conn, receipt)
+    process_email(conn, cancel)
+
+    subs = get_subscriptions(conn)
+    netflix = [s for s in subs if s["name"] == "Netflix"][0]
+    assert netflix["cancelled_at"] is not None, "cancelled_at must be set after cancellation email"
+
+
+def test_cancellation_event_type(conn):
+    """Cancellation email → event_type 'cancellation' on the email record."""
+    receipt = _make_email("t011a", "billing@account.netflix.com",
+                          "Your Netflix receipt - $15.49", "2025-04-01T08:00:00Z")
+    cancel = _make_email("t011b", "billing@account.netflix.com",
+                         "Your Netflix subscription has been cancelled", "2025-05-01T08:00:00Z")
+    process_email(conn, receipt)
+    result = process_email(conn, cancel)
+    assert result.event_type == "cancellation"
+
+
+def test_trial_started_sets_trial_status(conn):
+    """TRIAL_STARTED email creates subscription with status='TRIAL' and event_type 'trial_started'."""
+    email = _make_email("t012", "noreply@github.com",
+                        "You've started a free trial of GitHub Copilot")
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    assert result.event_type == "trial_started"
+    subs = get_subscriptions(conn)
+    github = [s for s in subs if s["name"] == "GitHub"][0]
+    assert github["status"] == "TRIAL"
+
+
+def test_first_charge_date_set_on_receipt(conn):
+    """After a receipt, first_charge_date must be populated on the subscription."""
+    email = _make_email("t013", "billing@account.netflix.com",
+                        "Your Netflix membership receipt - $15.49")
+    process_email(conn, email)
+    subs = get_subscriptions(conn)
+    netflix = [s for s in subs if s["name"] == "Netflix"][0]
+    assert netflix["first_charge_date"] is not None, "first_charge_date must be set on first receipt"
+
+
+def test_short_evidence_stored_on_receipt(conn):
+    """A receipt email must produce a non-null short_evidence starting with 'New subscription'."""
+    email = _make_email("t014", "billing@account.netflix.com",
+                        "Your Netflix membership receipt - $15.49")
+    process_email(conn, email)
+    records = get_email_records(conn)
+    assert records[0]["short_evidence"] is not None
+    assert records[0]["short_evidence"].startswith("New subscription")
+
+
+def test_refund_pattern_detected(conn):
+    """Refund subject on a Tier 1 domain → DETECTED with event_type 'refund'."""
+    email = _make_email("t015", "billing@account.netflix.com",
+                        "We've issued a refund of $15.49 to your account")
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    assert result.event_type == "refund"
+
+
+def test_failed_payment_pattern_detected(conn):
+    """Failed-payment subject on a Tier 1 domain → DETECTED with event_type 'failed_payment'."""
+    email = _make_email("t016", "no-reply@spotify.com",
+                        "Action required: payment failed for your Spotify Premium subscription")
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    assert result.event_type == "failed_payment"

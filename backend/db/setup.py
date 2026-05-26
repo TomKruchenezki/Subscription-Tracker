@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -6,9 +7,19 @@ from pathlib import Path
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
-def _migrations_sql() -> str:
-    sql_file = _MIGRATIONS_DIR / "001_initial_schema.sql"
-    return sql_file.read_text(encoding="utf-8")
+def _migration_version(sql: str) -> int | None:
+    """Return the schema_version number inserted by this migration, or None.
+
+    Every migration ends with:
+        INSERT OR IGNORE INTO schema_version (version, ...) VALUES (N, ...)
+    We extract N so init_db can skip migrations that are already applied.
+    """
+    m = re.search(
+        r"INSERT\s+OR\s+IGNORE\s+INTO\s+schema_version[^;]*VALUES\s*\(\s*(\d+)",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return int(m.group(1)) if m else None
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -20,9 +31,26 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 
 
 def init_db(db_path: str) -> None:
+    """Apply all pending migrations in order.
+
+    Idempotent: migrations whose version is already recorded in schema_version
+    are skipped, so calling init_db on an existing database is safe.
+    """
     conn = get_connection(db_path)
     try:
-        conn.executescript(_migrations_sql())
+        for sql_path in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+            sql = sql_path.read_text(encoding="utf-8")
+            version = _migration_version(sql)
+            if version is not None:
+                try:
+                    already = conn.execute(
+                        "SELECT 1 FROM schema_version WHERE version = ?", (version,)
+                    ).fetchone()
+                    if already:
+                        continue          # migration already applied — skip
+                except sqlite3.OperationalError:
+                    pass                  # schema_version doesn't exist yet — run it
+            conn.executescript(sql)
         conn.commit()
     finally:
         conn.close()
@@ -33,8 +61,10 @@ def init_db(db_path: str) -> None:
 def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | None,
                          currency: str, billing_cycle: str, category: str,
                          status: str, source_provider: str, service_url: str | None = None,
-                         next_renewal: str | None = None) -> str:
-    """Insert or update a subscription by canonical name. Returns subscription_id."""
+                         next_renewal: str | None = None) -> tuple[str, bool]:
+    """Insert or update a subscription by canonical name.
+    Returns (subscription_id, was_created).
+    """
     now = _now()
     row = conn.execute(
         "SELECT subscription_id FROM subscriptions WHERE name = ?", (name,)
@@ -54,6 +84,7 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
                WHERE subscription_id = ?""",
             (amount, currency, billing_cycle, billing_cycle, category, status, now, now, sub_id),
         )
+        return sub_id, False
     else:
         sub_id = str(uuid.uuid4())
         conn.execute(
@@ -65,7 +96,7 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
             (sub_id, name, service_url, amount, currency, billing_cycle,
              next_renewal, category, status, now, now, source_provider, now, now),
         )
-    return sub_id
+        return sub_id, True
 
 
 def update_subscription_status(conn: sqlite3.Connection, name: str, status: str) -> None:
@@ -73,6 +104,45 @@ def update_subscription_status(conn: sqlite3.Connection, name: str, status: str)
     conn.execute(
         "UPDATE subscriptions SET status = ?, updated_at = ? WHERE name = ?",
         (status, now, name),
+    )
+
+
+def update_subscription_lifecycle(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    *,
+    first_charge_date: str | None = None,
+    last_charge_date: str | None = None,
+    cancelled_at: str | None = None,
+    trial_ends_at: str | None = None,
+) -> None:
+    """Update lifecycle timestamp columns on a subscription.
+    first_charge_date and cancelled_at use COALESCE (set once; earliest event wins).
+    last_charge_date always overwrites.
+    """
+    now = _now()
+    fields = []
+    params: list = []
+    if first_charge_date is not None:
+        fields.append("first_charge_date = COALESCE(first_charge_date, ?)")
+        params.append(first_charge_date)
+    if last_charge_date is not None:
+        fields.append("last_charge_date = ?")
+        params.append(last_charge_date)
+    if cancelled_at is not None:
+        fields.append("cancelled_at = COALESCE(cancelled_at, ?)")
+        params.append(cancelled_at)
+    if trial_ends_at is not None:
+        fields.append("trial_ends_at = COALESCE(trial_ends_at, ?)")
+        params.append(trial_ends_at)
+    if not fields:
+        return
+    fields.append("updated_at = ?")
+    params.append(now)
+    params.append(subscription_id)
+    conn.execute(
+        f"UPDATE subscriptions SET {', '.join(fields)} WHERE subscription_id = ?",
+        params,
     )
 
 
@@ -98,7 +168,10 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
                          sender_address: str, sender_name: str | None, subject: str,
                          email_date: str, amount_extracted: float | None,
                          currency_extracted: str | None, confidence_score: float,
-                         disposition: str) -> str | None:
+                         disposition: str, event_type: str | None = None,
+                         billing_period_start: str | None = None,
+                         billing_period_end: str | None = None,
+                         short_evidence: str | None = None) -> str | None:
     """Insert an email record. Returns None if source_message_id already exists (dedup)."""
     existing = conn.execute(
         "SELECT record_id FROM email_records WHERE source_message_id = ?",
@@ -114,12 +187,14 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
            (record_id, subscription_id, source_message_id, source_provider,
             source_account_id, source_account_email, sender_address, sender_name,
             subject, email_date, amount_extracted, currency_extracted,
-            confidence_score, disposition, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            confidence_score, disposition, event_type, billing_period_start,
+            billing_period_end, short_evidence, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (record_id, subscription_id, source_message_id, source_provider,
          source_account_id, source_account_email, sender_address, sender_name,
          subject, email_date, amount_extracted, currency_extracted,
-         confidence_score, disposition, now),
+         confidence_score, disposition, event_type, billing_period_start,
+         billing_period_end, short_evidence, now),
     )
     return record_id
 

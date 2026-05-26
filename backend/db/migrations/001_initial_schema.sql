@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CONSTRAINT valid_billing_cycle   CHECK (billing_cycle IN ('MONTHLY', 'ANNUAL', 'WEEKLY', 'UNKNOWN')),
     CONSTRAINT valid_category        CHECK (category IN ('STREAMING', 'SAAS', 'NEWS', 'CLOUD', 'OTHER')),
-    CONSTRAINT valid_status          CHECK (status IN ('ACTIVE', 'CANCELLED', 'PAUSED')),
+    CONSTRAINT valid_status          CHECK (status IN ('ACTIVE', 'CANCELLED', 'PAUSED', 'TRIAL', 'UNKNOWN')),
     CONSTRAINT valid_source_provider CHECK (source_provider IN ('MOCK', 'GMAIL', 'MICROSOFT', 'IMAP', 'UNKNOWN'))
 );
 

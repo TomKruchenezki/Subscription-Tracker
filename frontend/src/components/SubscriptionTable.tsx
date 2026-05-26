@@ -37,12 +37,13 @@ export function SubscriptionTable({ subscriptions }: Props) {
           <th>Category</th>
           <th>Status</th>
           <th>Source</th>
+          <th>First charged</th>
           <th>Last seen</th>
         </tr>
       </thead>
       <tbody>
         {subscriptions.map((sub) => (
-          <tr key={sub.subscription_id} style={{ opacity: sub.status !== "ACTIVE" ? 0.5 : 1 }}>
+          <tr key={sub.subscription_id} style={{ opacity: sub.status !== "ACTIVE" && sub.status !== "TRIAL" ? 0.5 : 1 }}>
             <td style={{ fontWeight: 500 }}>{sub.name}</td>
             <td>{monthlyEquivalent(sub)}</td>
             <td>{CYCLE_LABELS[sub.billing_cycle]}</td>
@@ -52,6 +53,11 @@ export function SubscriptionTable({ subscriptions }: Props) {
             </td>
             <td>
               <span className={`badge badge-${sub.source_provider.toLowerCase()}`}>{sub.source_provider}</span>
+            </td>
+            <td style={{ color: "var(--muted)" }}>
+              {sub.first_charge_date
+                ? new Date(sub.first_charge_date).toLocaleDateString()
+                : "—"}
             </td>
             <td style={{ color: "var(--muted)" }}>{new Date(sub.last_seen).toLocaleDateString()}</td>
           </tr>

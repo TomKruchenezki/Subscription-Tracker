@@ -15,6 +15,7 @@ from backend.parser import parse_email_metadata
 from backend.db.setup import (
     upsert_subscription,
     update_subscription_status,
+    update_subscription_lifecycle,
     insert_email_record,
 )
 
@@ -39,6 +40,19 @@ _CATEGORY_MAP = {
     "Dropbox": "CLOUD",
 }
 
+_PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
+    PatternType.RECEIPT:        None,           # resolved at runtime
+    PatternType.RENEWAL:        None,           # resolved at runtime
+    PatternType.TRIAL_END:      "trial_ending",
+    PatternType.TRIAL_STARTED:  "trial_started",
+    PatternType.CANCELLATION:   "cancellation",
+    PatternType.FAILED_PAYMENT: "failed_payment",
+    PatternType.REFUND:         "refund",
+    PatternType.PRICE_CHANGE:   "price_change",
+    PatternType.PROMOTIONAL:    None,
+    PatternType.NONE:           None,
+}
+
 
 @dataclass
 class DetectionResult:
@@ -47,6 +61,32 @@ class DetectionResult:
     confidence_score: float
     subscription_id: str | None
     canonical_name: str | None
+    event_type: str | None
+
+
+def _make_short_evidence(
+    event_type: str | None,
+    name: str,
+    amount: float | None,
+    currency: str,
+    billing_cycle: str,
+) -> str | None:
+    if not event_type:
+        return None
+    amt = f"{currency} {amount:.2f}" if amount else ""
+    cyc = f"/{billing_cycle.lower()}" if billing_cycle not in ("UNKNOWN", None) and amount else ""
+    templates: dict[str, str | None] = {
+        "subscription_started": f"New subscription: {amt}{cyc} from {name}",
+        "renewal_charge":       f"Renewal: {amt}{cyc} from {name}",
+        "trial_started":        f"Trial started: {name}",
+        "trial_ending":         f"Trial ending: {name}" + (f" — then {amt}{cyc}" if amt else ""),
+        "cancellation":         f"Cancelled: {name}",
+        "refund":               f"Refund: {amt} from {name}" if amt else f"Refund from {name}",
+        "failed_payment":       f"Payment failed: {name}" + (f" ({amt})" if amt else ""),
+        "price_change":         f"Price change: {name}" + (f" → {amt}{cyc}" if amt else ""),
+        "unknown_payment":      f"Payment: {amt} from {name}" if amt else None,
+    }
+    return templates.get(event_type)
 
 
 def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionResult:
@@ -68,7 +108,6 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     billing_cycle = parsed["billing_cycle"]
     canonical_name = parsed["canonical_name"] or canonical_name_from_tier or "Unknown"
 
-    # Use tier-provided canonical name for Tier 1 domains (more reliable)
     if canonical_name_from_tier:
         canonical_name = canonical_name_from_tier
 
@@ -81,34 +120,69 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
     logger.info("Processed %s: score=%.2f disposition=%s name=%s",
                 email.source_message_id, score, disposition, canonical_name)
 
+    email_date_str = email.email_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+    event_type: str | None = None
     subscription_id: str | None = None
 
     if disposition == "DETECTED":
+
         if pattern == PatternType.CANCELLATION:
-            # Update existing subscription status to CANCELLED
             update_subscription_status(conn, canonical_name, "CANCELLED")
-            # Find the subscription_id for the email record
             row = conn.execute(
                 "SELECT subscription_id FROM subscriptions WHERE name = ?",
                 (canonical_name,),
             ).fetchone()
             if row:
                 subscription_id = row["subscription_id"]
-            status = "CANCELLED"
-        else:
-            status = "ACTIVE"
-            category = _CATEGORY_MAP.get(canonical_name, "SAAS")
-            subscription_id = upsert_subscription(
-                conn,
-                name=canonical_name,
-                amount=amount,
-                currency=currency,
-                billing_cycle=billing_cycle,
-                category=category,
-                status=status,
-                source_provider=email.source_provider,
-            )
+                update_subscription_lifecycle(conn, subscription_id, cancelled_at=email_date_str)
+            event_type = "cancellation"
 
+        elif pattern == PatternType.TRIAL_END:
+            existing = conn.execute(
+                "SELECT subscription_id FROM subscriptions WHERE name = ?",
+                (canonical_name,),
+            ).fetchone()
+            if existing:
+                subscription_id = existing["subscription_id"]
+            else:
+                subscription_id, _ = upsert_subscription(
+                    conn, name=canonical_name, amount=amount, currency=currency,
+                    billing_cycle=billing_cycle,
+                    category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
+                    status="TRIAL", source_provider=email.source_provider,
+                )
+            event_type = "trial_ending"
+            if subscription_id:
+                update_subscription_lifecycle(conn, subscription_id, trial_ends_at=email_date_str)
+
+        elif pattern == PatternType.TRIAL_STARTED:
+            subscription_id, _ = upsert_subscription(
+                conn, name=canonical_name, amount=amount, currency=currency,
+                billing_cycle=billing_cycle,
+                category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
+                status="TRIAL", source_provider=email.source_provider,
+            )
+            event_type = "trial_started"
+
+        else:
+            # RECEIPT, RENEWAL, REFUND, FAILED_PAYMENT, PRICE_CHANGE, NONE
+            subscription_id, was_created = upsert_subscription(
+                conn, name=canonical_name, amount=amount, currency=currency,
+                billing_cycle=billing_cycle,
+                category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
+                status="ACTIVE", source_provider=email.source_provider,
+            )
+            if pattern in (PatternType.RECEIPT, PatternType.RENEWAL):
+                event_type = "subscription_started" if was_created else "renewal_charge"
+                update_subscription_lifecycle(
+                    conn, subscription_id,
+                    first_charge_date=email_date_str,
+                    last_charge_date=email_date_str,
+                )
+            else:
+                event_type = _PATTERN_TO_EVENT_TYPE.get(pattern, "unknown_payment")
+
+        short_evidence = _make_short_evidence(event_type, canonical_name, amount, currency, billing_cycle)
         insert_email_record(
             conn,
             source_message_id=email.source_message_id,
@@ -119,15 +193,24 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
             sender_address=email.sender_address,
             sender_name=email.sender_name,
             subject=email.subject,
-            email_date=email.email_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            email_date=email_date_str,
             amount_extracted=amount,
             currency_extracted=currency if amount else None,
             confidence_score=score,
             disposition=disposition,
+            event_type=event_type,
+            billing_period_start=None,
+            billing_period_end=None,
+            short_evidence=short_evidence,
         )
         conn.commit()
 
     elif disposition == "FLAGGED":
+        if pattern in (PatternType.RECEIPT, PatternType.RENEWAL):
+            event_type = "unknown_payment"
+        else:
+            event_type = _PATTERN_TO_EVENT_TYPE.get(pattern)
+        short_evidence = _make_short_evidence(event_type, canonical_name, amount, currency, billing_cycle)
         insert_email_record(
             conn,
             source_message_id=email.source_message_id,
@@ -138,11 +221,15 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
             sender_address=email.sender_address,
             sender_name=email.sender_name,
             subject=email.subject,
-            email_date=email.email_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            email_date=email_date_str,
             amount_extracted=amount,
             currency_extracted=currency if amount else None,
             confidence_score=score,
             disposition=disposition,
+            event_type=event_type,
+            billing_period_start=None,
+            billing_period_end=None,
+            short_evidence=short_evidence,
         )
         conn.commit()
 
@@ -154,4 +241,5 @@ def process_email(conn: sqlite3.Connection, email: EmailMetadata) -> DetectionRe
         confidence_score=score,
         subscription_id=subscription_id,
         canonical_name=canonical_name,
+        event_type=event_type,
     )

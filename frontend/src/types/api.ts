@@ -1,6 +1,6 @@
 export type BillingCycle = "MONTHLY" | "ANNUAL" | "WEEKLY" | "UNKNOWN";
 export type Category = "STREAMING" | "SAAS" | "NEWS" | "CLOUD" | "OTHER";
-export type SubscriptionStatus = "ACTIVE" | "CANCELLED" | "PAUSED";
+export type SubscriptionStatus = "ACTIVE" | "CANCELLED" | "PAUSED" | "TRIAL" | "UNKNOWN";
 export type Disposition = "DETECTED" | "FLAGGED" | "IGNORED";
 export type SourceProvider = "MOCK" | "GMAIL" | "MICROSOFT" | "IMAP" | "UNKNOWN";
 
@@ -17,6 +17,10 @@ export interface Subscription {
   first_seen: string;
   last_seen: string;
   source_provider: SourceProvider;
+  first_charge_date: string | null;
+  last_charge_date: string | null;
+  cancelled_at: string | null;
+  trial_ends_at: string | null;
 }
 
 export interface EmailRecord {
@@ -33,6 +37,10 @@ export interface EmailRecord {
   currency_extracted: string | null;
   confidence_score: number;
   disposition: Disposition;
+  event_type: string | null;
+  billing_period_start: string | null;
+  billing_period_end: string | null;
+  short_evidence: string | null;
 }
 
 export interface ScanRequest {
