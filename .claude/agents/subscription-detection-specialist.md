@@ -73,6 +73,68 @@ Before any new rule is implemented:
 6. Run `pytest tests/unit/test_detector.py` — all cases must pass
 7. If the rule changes what data is stored → invoke `privacy-security-reviewer`
 
+## Phase 2: Tier 1 Sender Expansion
+
+The following domains must be added to Tier 1 in `sender_list.py` before Phase 2 ships.
+HIGH priority domains are required; MEDIUM domains are strongly recommended.
+
+| Domain | Canonical Name | Category | Priority |
+|--------|---------------|----------|----------|
+| `openai.com` | ChatGPT | SAAS | HIGH |
+| `billing.openai.com` | ChatGPT | SAAS | HIGH |
+| `email.apple.com` | Apple | CLOUD | HIGH |
+| `no-reply@store.google.com` | Google | CLOUD | HIGH |
+| `billing.google.com` | Google | CLOUD | HIGH |
+| `youtube.com` | YouTube Premium | STREAMING | HIGH |
+| `peacocktv.com` | Peacock | STREAMING | MEDIUM |
+| `crunchyroll.com` | Crunchyroll | STREAMING | MEDIUM |
+| `nordvpn.com` | NordVPN | SAAS | MEDIUM |
+| `duolingo.com` | Duolingo | SAAS | MEDIUM |
+| `headspace.com` | Headspace | SAAS | MEDIUM |
+| `calm.com` | Calm | SAAS | MEDIUM |
+| `patreon.com` | Patreon | NEWS | MEDIUM |
+| `anthropic.com` | Claude | SAAS | MEDIUM |
+| `cursor.sh` | Cursor | SAAS | MEDIUM |
+| `music.amazon.com` | Amazon Music | STREAMING | MEDIUM |
+
+### Ambiguous Multi-Product Senders
+
+| Service | Problem | Resolution |
+|---------|---------|------------|
+| Apple | `email.apple.com` bills for App Store, iCloud, Apple TV+, Apple Music | Use "Apple" as catch-all canonical name; specific product in `short_evidence` |
+| Google | `billing.google.com` covers Google One, Workspace, YouTube Premium | Use "Google" as canonical name unless subject clearly contains "YouTube" |
+| OpenAI | `openai.com` sends for both ChatGPT Plus and API billing | Resolve to "ChatGPT" if subject contains "ChatGPT"; "OpenAI" otherwise |
+
+## Phase 2: Confidence Score Rules
+
+### Tier 1 No-Penalty Floor (confidence_scorer.py)
+
+For emails from Tier 1 senders that do NOT match a PROMOTIONAL pattern, set a minimum
+score floor of **0.70** so they auto-detect rather than landing in Review Queue.
+
+```python
+# After computing score from tier + pattern + parser:
+if tier == 1 and pattern_type != PatternType.PROMOTIONAL:
+    score = max(score, 0.70)
+```
+
+This is a narrow exception. Tier 1 + PROMOTIONAL still applies the −0.30 penalty normally.
+Gate this behind the scan mode or a feature flag to avoid breaking mock test expectations
+(mock tests currently verify specific score values; the floor should only apply in Gmail mode).
+
+### Never-Ignore Guard for Tier 2 + Amount (detector.py)
+
+A Tier 2 sender (payment processors: Stripe, Paddle, Braintree, PayPal, etc.) with a
+detected amount must never be silently discarded. Add this guard after `score_to_disposition()`:
+
+```python
+if disposition == "IGNORED" and tier >= 2 and amount_extracted is not None:
+    disposition = "FLAGGED"
+```
+
+This ensures all payment-processor emails with a dollar amount reach the Review Queue
+regardless of confidence score.
+
 ## What You Produce
 
 - Detection module implementations in `backend/detector/`

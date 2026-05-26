@@ -67,9 +67,63 @@ made with `format=full` or `format=raw`.
 - Coverage gap analysis: which modules have < 90% coverage and what cases are missing
 - Updates to `docs/TEST_PLAN.md` when new test categories are added
 
+## Phase 2: Required Mock Fixture Scenarios
+
+The following scenarios must have fixture entries in `data/mock/mock_emails.json` and
+corresponding entries in `data/mock/expected_detections.json` before Phase 2 ships.
+Each fixture must include `expected_outcome`, `expected_event_type`, and (where applicable)
+`expected_subscription_name`, `expected_amount`, `expected_billing_cycle`.
+
+| ID | Scenario | Sender | Subject | Expected Outcome |
+|----|---------|--------|---------|-----------------|
+| mock_055 | Apple receipt | `no-reply@email.apple.com` | `Your receipt from Apple. Amount charged: $2.99` | DETECTED, subscription_started |
+| mock_056 | Google One | `no-reply@store.google.com` | `Your Google One membership receipt - $2.99/month` | DETECTED, subscription_started |
+| mock_057 | YouTube Premium | `no-reply@youtube.com` | `Your YouTube Premium receipt - $13.99` | DETECTED, subscription_started |
+| mock_058 | ChatGPT Plus | `billing@openai.com` | `Your ChatGPT Plus receipt - $20.00` | DETECTED, subscription_started |
+| mock_059 | Annual Netflix | `billing@account.netflix.com` | `Your Netflix annual plan receipt - $189.00/year` | DETECTED, subscription_started, billing_cycle=ANNUAL |
+| mock_060 | Amazon one-time (false positive guard) | `no-reply@amazon.com` | `Your Amazon.com order receipt - $34.99` | IGNORED |
+| mock_061 | Historical cancellation | `billing@account.netflix.com` | `Your Netflix subscription has been cancelled` (2023 date) | DETECTED, cancellation |
+| mock_062 | Trial-to-paid conversion | `no-reply@figma.com` | `Thank you for subscribing to Figma — $15.00/month` | DETECTED, subscription_started |
+| mock_063 | Paddle refund | `billing-noreply@paddle.com` | `Your refund of $29.00 has been processed` | FLAGGED, refund |
+| mock_064 | Stripe failed payment | `no-reply@stripe.com` | `Action required: payment failed for your subscription` | FLAGGED, failed_payment |
+| mock_065 | Square billing noise | `receipts@squareup.com` | `Your payment receipt — $12.50` | FLAGGED or IGNORED |
+| mock_066 | Quarterly billing | `billing@hubspot.com` | `Your HubSpot quarterly billing receipt - $450.00` | FLAGGED, amount extracted |
+
+## Phase 2: False-Negative Gate
+
+**No known-subscription fixture may produce IGNORED.** This is a hard gate.
+
+A "known subscription" is any fixture where `expected_outcome` is `DETECTED` or `FLAGGED`.
+If a fixture that represents a real subscription produces `IGNORED` in the detection pipeline,
+this is a false negative that must be fixed before Phase 2 ships — either by updating the
+Tier 1/2 sender list, the pattern library, or the confidence floor rules.
+
+Parametrize this check so it runs automatically on every fixture in `expected_detections.json`:
+
+```python
+@pytest.mark.parametrize("entry", load_expected_detections())
+def test_no_false_negatives(entry, conn):
+    if entry["expected_outcome"] in ("DETECTED", "FLAGGED"):
+        result = process_email(conn, make_email(entry))
+        assert result.disposition != "IGNORED", \
+            f"False negative: {entry['id']} ({entry['sender']}) was IGNORED"
+```
+
+## Phase 2: Integration Test Requirements
+
+Every integration test touching the Gmail source must assert:
+- No `messages().get()` call was made with `format=full` or `format=raw`
+- Deduplication is enforced: a `source_message_id` appearing in two passes is processed once
+- The correct pass set is used for each scan mode (quick=2 passes, deep=4, forensic=6)
+- The mode-specific threshold override is applied (not the env var default)
+
+Use `responses` or `unittest.mock` to stub Gmail HTTP — no live API calls in any test.
+
 ## What You Do NOT Do
 
 - Write tests that require live Gmail credentials in normal `pytest` runs
 - Skip privacy compliance tests for any reason
 - Accept a coverage number without verifying the uncovered lines are intentional
 - Write tests that assert "no exception raised" without also asserting the output value
+- Ship Phase 2 with any fixture in `expected_detections.json` that is a known subscription
+  but produces IGNORED (false negative gate above must pass)

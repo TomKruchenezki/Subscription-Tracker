@@ -58,12 +58,63 @@ Parsing failures return `None` for the relevant field with a note in `parse_note
 
 - Every regex pattern you write must have a corresponding parametrized pytest case in
   `tests/unit/test_amount_extractor.py` or `tests/unit/test_cycle_detector.py`
-- Valid amount range: $0.99 – $999.99. Amounts outside this range → `None`, no exception
+- Valid amount range: $0.99 – $9,999.99. Amounts outside this range → `None`, no exception.
+  (Phase 2 raised the cap from $999.99 to $9,999.99 to cover annual enterprise plans.)
 - If multiple amounts appear in a subject, use the first match and add a note to `parse_notes`
 - Billing cycle detection uses keywords only — never infer cycle from amount alone
 - `sender_resolver.py` maps known domains to canonical names. Unknown domains return
   the domain itself as the service name (e.g., `billing.unknownapp.io` → `unknownapp`)
 - Log ambiguous cases at DEBUG level via `parse_notes` — never at INFO or above
+
+## Phase 2: Provider-Specific Subject Formats
+
+Some high-volume senders use fixed subject line formats that require targeted extraction logic.
+These take priority over generic regex patterns when the sender matches.
+
+### Apple (`email.apple.com`)
+
+Apple receipts always follow: `Your receipt from Apple.`
+The amount appears after the label `Amount Charged:` or `Amount charged:`.
+
+```
+"Your receipt from Apple."
+→ Look for: "Amount [Cc]harged:\s*\$?(\d+\.\d{2})"
+→ No amount in subject title itself — it's a label inside the subject on some clients
+```
+
+If no amount label is found, fall back to generic amount extraction. Canonical name: `"Apple"`.
+
+### Google (`billing.google.com`, `store.google.com`)
+
+Google receipts follow: `Your [Product] receipt` or `Your [Product] membership receipt`.
+
+```
+"Your Google One membership receipt - $2.99/month"
+→ Generic amount extraction works; cycle = MONTHLY
+Canonical name: "Google" (unless subject contains "YouTube" → "YouTube Premium")
+```
+
+### OpenAI (`openai.com`, `billing.openai.com`)
+
+```
+"Your ChatGPT Plus receipt - $20.00"
+→ Canonical name: "ChatGPT" (subject contains "ChatGPT")
+"Your OpenAI API receipt - $12.50"
+→ Canonical name: "OpenAI" (no "ChatGPT" in subject)
+```
+
+## Phase 2: Quarterly Billing Cycle Detection (cycle_detector.py)
+
+Add `QUARTERLY` as a new `BillingCycle` value and detect it from these subject keywords:
+
+- `"quarterly"` → `QUARTERLY`
+- `"every 3 months"` → `QUARTERLY`
+- `"every three months"` → `QUARTERLY`
+- `"Q1"`, `"Q2"`, `"Q3"`, `"Q4"` combined with billing keywords → `QUARTERLY`
+
+The `BillingCycle` type must be expanded in both `backend/` models and `frontend/src/types/api.ts`
+when this is implemented. Coordinate with `subscription-detection-specialist` on monthly-equivalent
+cost calculation for quarterly amounts.
 
 ## What You Produce
 
