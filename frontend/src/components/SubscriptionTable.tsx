@@ -38,7 +38,7 @@ export function SubscriptionTable({ subscriptions }: Props) {
           <th>Status</th>
           <th>Source</th>
           <th>First charged</th>
-          <th>Last seen</th>
+          <th>Last charged</th>
         </tr>
       </thead>
       <tbody>
@@ -59,7 +59,11 @@ export function SubscriptionTable({ subscriptions }: Props) {
                 ? new Date(sub.first_charge_date).toLocaleDateString()
                 : "—"}
             </td>
-            <td style={{ color: "var(--muted)" }}>{new Date(sub.last_seen).toLocaleDateString()}</td>
+            <td style={{ color: "var(--muted)" }}>
+              {sub.last_charge_date
+                ? new Date(sub.last_charge_date).toLocaleDateString()
+                : "—"}
+            </td>
           </tr>
         ))}
       </tbody>

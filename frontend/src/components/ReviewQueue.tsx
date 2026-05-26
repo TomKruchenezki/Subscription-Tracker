@@ -16,6 +16,7 @@ export function ReviewQueue({ records }: Props) {
         <tr>
           <th>Sender</th>
           <th>Subject</th>
+          <th>Type</th>
           <th>Date</th>
           <th>Amount</th>
           <th>Confidence</th>
@@ -25,7 +26,17 @@ export function ReviewQueue({ records }: Props) {
         {records.map((record) => (
           <tr key={record.record_id}>
             <td style={{ color: "var(--muted)", fontSize: "12px" }}>{record.sender_address}</td>
-            <td>{record.subject}</td>
+            <td>
+              <div>{record.subject}</div>
+              {record.short_evidence && (
+                <div style={{ color: "var(--muted)", fontSize: "12px", marginTop: "2px" }}>
+                  {record.short_evidence}
+                </div>
+              )}
+            </td>
+            <td style={{ color: "var(--muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
+              {record.event_type ?? "—"}
+            </td>
             <td style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
               {new Date(record.email_date).toLocaleDateString()}
             </td>
