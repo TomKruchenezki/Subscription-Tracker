@@ -2,7 +2,7 @@
 
 ---
 
-## Phase 0: Repository Foundation (Current)
+## Phase 0: Repository Foundation (Complete)
 
 **Goal:** Create the planning, workflow, and configuration layer before any application
 code. Another developer or Claude agent can read CLAUDE.md and the docs directory and
@@ -21,7 +21,7 @@ understand the full intended system.
 
 ---
 
-## Phase 1: Mock Data + Local Detection Engine
+## Phase 1: Mock Data + Local Detection Engine (Current)
 
 **Goal:** Build a fully working detection and display pipeline that runs entirely on
 synthetic mock data. No Gmail API calls. This phase proves the detection logic works

@@ -5,7 +5,7 @@ by reading Gmail metadata only (sender, subject, date — never body). All data 
 a local SQLite file. No cloud sync, no bank access, no telemetry.
 
 **Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 0 — repository scaffolding (see `docs/ROADMAP.md`)
+**Current phase:** Phase 1 — mock data + local detection engine (see `docs/ROADMAP.md`)
 
 ---
 
