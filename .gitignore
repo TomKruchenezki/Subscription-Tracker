@@ -1,0 +1,63 @@
+# === Secrets and credentials — NEVER commit these ===
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+client_secret*.json
+*oauth*.json
+encrypted_token
+*.token
+*.key
+
+# Block all JSON by default to catch stray credential files,
+# but explicitly allow mock fixtures and agent definitions below.
+*.json
+!data/mock/*.json
+!.claude/agents/*.json
+
+# === Database files ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+.tox/
+
+# === Node / Frontend ===
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.npm
+.pnp
+.pnp.js
+
+# === Logs ===
+*.log
+logs/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
