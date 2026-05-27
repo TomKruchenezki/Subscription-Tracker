@@ -13,6 +13,7 @@ Weights:
   Failed payment:  +0.20
   Price change:    +0.15  (informational, not transactional)
   Promotional:     -0.30
+  Notification:    -0.35  (non-subscription signal: social alerts, policy updates, travel)
   Parser (amount detected): +0.10 (capped — see note below)
   Parser (cycle detected):  +0.05 (included in same cap)
   Combined parser cap:       0.10
@@ -20,6 +21,12 @@ Weights:
 Note on parser cap: amount (+0.10) and cycle (+0.05) are corroborating
 evidence for the same signal. Capping at 0.10 prevents over-weighting parser
 output relative to sender and subject signals. Do not remove the cap.
+
+Note on NOTIFICATION weight: -0.35 (not -0.30) ensures Tier 1 + NOTIFICATION
+= 0.60 - 0.35 = 0.25, which is below the forensic-mode threshold of 0.30.
+With -0.30 it would be exactly 0.30 → FLAGGED. Billing patterns (RECEIPT,
+RENEWAL, etc.) have higher priority in match_pattern() and always win over
+NOTIFICATION, so legitimate billing emails from Tier 1 senders are unaffected.
 """
 from backend.detector.pattern_library import PatternType
 
@@ -35,6 +42,7 @@ PATTERN_WEIGHTS = {
     PatternType.FAILED_PAYMENT: 0.20,
     PatternType.PRICE_CHANGE:   0.15,
     PatternType.PROMOTIONAL:   -0.30,
+    PatternType.NOTIFICATION:  -0.35,
     PatternType.NONE:           0.00,
 }
 

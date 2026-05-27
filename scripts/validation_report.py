@@ -16,6 +16,7 @@ The database is opened in READ-ONLY mode. This script cannot corrupt it.
 """
 
 import argparse
+import hashlib
 import os
 import sqlite3
 import sys
@@ -167,6 +168,41 @@ def report(db_path: str, use_mock: bool) -> None:
         print(f"  USE_MOCK=true — mock mode is active (expected MOCK rows).")
         print(f"  MOCK email records: {mock_records}   MOCK subscriptions: {mock_subs}")
 
+    # ── Gmail Account Breakdown ───────────────────────────────────────────────
+    print(_header("Gmail Account Breakdown"))
+
+    acct_rows = _run(conn,
+        """SELECT source_account_id, disposition, COUNT(*) as cnt
+           FROM email_records
+           WHERE source_provider = 'GMAIL'
+           GROUP BY source_account_id, disposition
+           ORDER BY source_account_id, disposition""")
+
+    if acct_rows:
+        # Group by masked account ID
+        acct_map: dict[str, dict[str, int]] = {}
+        for row in acct_rows:
+            raw_id = row["source_account_id"] or ""
+            alias = hashlib.sha256(raw_id.encode()).hexdigest()[:8]
+            if alias not in acct_map:
+                acct_map[alias] = {}
+            acct_map[alias][row["disposition"]] = row["cnt"]
+
+        for alias, disp_counts in sorted(acct_map.items()):
+            detected = disp_counts.get("DETECTED", 0)
+            flagged  = disp_counts.get("FLAGGED",  0)
+            ignored  = disp_counts.get("IGNORED",  0)
+            print(f"  Account {alias}:")
+            print(f"    DETECTED: {detected:<4}  FLAGGED: {flagged:<4}  IGNORED: {ignored}")
+
+        if len(acct_map) > 1:
+            print(f"\n  Note: {len(acct_map)} Gmail accounts found in email_records.")
+            print(f"  Scan currently uses the first connected account only (LIMIT 1).")
+        else:
+            print(f"\n  Note: account alias is an 8-char SHA-256 hash (stable across runs).")
+    else:
+        print("  (no GMAIL email records)")
+
     # ── Review Queue ──────────────────────────────────────────────────────────
     gmail_flagged = _run(conn,
         "SELECT COUNT(*) FROM email_records WHERE disposition='FLAGGED' AND source_provider='GMAIL'")[0][0]
@@ -220,6 +256,50 @@ def report(db_path: str, use_mock: bool) -> None:
             print(f"  {row['et']:<30} {row['cnt']}")
     else:
         print("  (no GMAIL records)")
+
+    # ── Detection Quality ─────────────────────────────────────────────────────
+    print(_header("Detection Quality (GMAIL)"))
+
+    gmail_total = _run(conn,
+        "SELECT COUNT(*) FROM email_records WHERE source_provider='GMAIL'")[0][0]
+
+    # Amount extraction rate by disposition
+    amt_rows = _run(conn,
+        """SELECT disposition,
+                  COUNT(*) as total,
+                  SUM(CASE WHEN amount_extracted IS NOT NULL THEN 1 ELSE 0 END) as with_amount
+           FROM email_records WHERE source_provider = 'GMAIL'
+           GROUP BY disposition
+           ORDER BY disposition""")
+
+    if amt_rows:
+        print(f"  Amount extraction (of {gmail_total} total GMAIL emails):")
+        for row in amt_rows:
+            total_d = row["total"]
+            with_a  = row["with_amount"]
+            pct = f"{100 * with_a // total_d:3d}%" if total_d > 0 else "  N/A"
+            print(f"    {row['disposition']:<10} {total_d:>4} total,  {with_a:>3} with amount ({pct})")
+        # All GMAIL total
+        all_with = sum(r["with_amount"] for r in amt_rows)
+        all_pct = f"{100 * all_with // gmail_total:3d}%" if gmail_total > 0 else "  N/A"
+        print(f"    {'All GMAIL':<10} {gmail_total:>4} total,  {all_with:>3} with amount ({all_pct})")
+    else:
+        print("  Amount extraction: (no GMAIL records)")
+
+    # IGNORED breakdown
+    ignored_zero = _run(conn,
+        """SELECT COUNT(*) FROM email_records
+           WHERE source_provider='GMAIL' AND disposition='IGNORED'
+           AND confidence_score = 0.0""")[0][0]
+    ignored_pos = _run(conn,
+        """SELECT COUNT(*) FROM email_records
+           WHERE source_provider='GMAIL' AND disposition='IGNORED'
+           AND confidence_score > 0.0""")[0][0]
+    ignored_total = ignored_zero + ignored_pos
+    if ignored_total > 0:
+        print(f"\n  IGNORED breakdown ({ignored_total} total):")
+        print(f"    Score = 0.00 (excluded domain or no signal):  {ignored_zero}")
+        print(f"    Score > 0.00 (below review threshold):         {ignored_pos}")
 
     # ── Duplicates ────────────────────────────────────────────────────────────
     print(_header("Duplicates"))
@@ -329,6 +409,19 @@ def report(db_path: str, use_mock: bool) -> None:
             None if missing_first > 0 else True,
             f"{missing_first} missing" if missing_first else "all present"
         ))
+
+    # Date ordering integrity (first_charge_date must be <= last_charge_date)
+    date_inversion_count = _run(conn,
+        """SELECT COUNT(*) FROM subscriptions
+           WHERE source_provider='GMAIL'
+           AND first_charge_date IS NOT NULL
+           AND last_charge_date IS NOT NULL
+           AND first_charge_date > last_charge_date""")[0][0]
+    checks.append((
+        "Date ordering (first <= last)",
+        None if date_inversion_count > 0 else True,
+        f"{date_inversion_count} inverted (first > last)" if date_inversion_count > 0 else "all correct"
+    ))
 
     for label, ok, detail in checks:
         flag_str = _flag(ok is True, warn=(ok is None))

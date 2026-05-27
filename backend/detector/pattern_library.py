@@ -16,6 +16,7 @@ class PatternType(str, Enum):
     REFUND         = "REFUND"
     PRICE_CHANGE   = "PRICE_CHANGE"
     PROMOTIONAL    = "PROMOTIONAL"
+    NOTIFICATION   = "NOTIFICATION"
     NONE           = "NONE"
 
 
@@ -123,12 +124,39 @@ _PROMOTIONAL_PATTERNS = [
     re.compile(r"\b(get|save)\s+\d+%\b", re.IGNORECASE),
 ]
 
+_NOTIFICATION_PATTERNS = [
+    # Social/professional network notifications (never billing)
+    re.compile(r"\bappeared\s+in\b.{0,40}\bsearch(es)?\b", re.IGNORECASE),
+    re.compile(r"\bprofile\b.{0,20}\bview(s|ed)?\b", re.IGNORECASE),
+    re.compile(r"\bpeople\s+you\s+may\s+know\b", re.IGNORECASE),
+    re.compile(r"\bconnection\s+request\b", re.IGNORECASE),
+    re.compile(r"\b(endorsed|liked|commented\s+on|shared)\s+your\b", re.IGNORECASE),
+    re.compile(r"\bjob\s+(alert|recommendation|posting)\b", re.IGNORECASE),
+    # Policy/legal updates (never billing)
+    re.compile(r"\buser\s+agreement\b", re.IGNORECASE),
+    re.compile(r"\bprivacy\s+polic(y|ies)\b", re.IGNORECASE),
+    re.compile(r"\bterms\s+of\s+service\b", re.IGNORECASE),
+    re.compile(r"\bterms\s+and\s+conditions\b", re.IGNORECASE),
+    # Security/account alerts (never billing on their own)
+    re.compile(r"\bsign[\-\s]?in\s+(from\s+a?\s*new|attempt)\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+device\s+sign[\-\s]?in\b", re.IGNORECASE),
+    re.compile(r"\bverify\s+your\s+email\b", re.IGNORECASE),
+    re.compile(r"\b(password\s+reset|reset\s+(your\s+)?password)\b", re.IGNORECASE),
+    re.compile(r"\bsecurity\s+(alert|code|verification)\b", re.IGNORECASE),
+    # Travel/one-time receipts (not recurring subscriptions)
+    re.compile(r"\be[\-\s]?ticket\b", re.IGNORECASE),
+    re.compile(r"\bboarding\s+pass\b", re.IGNORECASE),
+    re.compile(r"\bflight\s+(itinerary|confirmation|booking)\b", re.IGNORECASE),
+    re.compile(r"\bhotel\s+(confirmation|reservation)\b", re.IGNORECASE),
+    re.compile(r"\breservation\s+confirmation\b", re.IGNORECASE),
+]
+
 
 def match_pattern(subject: str) -> PatternType:
     """
     Returns the strongest matching pattern type.
     Priority: FAILED_PAYMENT > REFUND > CANCELLATION > TRIAL_END > TRIAL_STARTED
-              > PRICE_CHANGE > RECEIPT > RENEWAL > PROMOTIONAL > NONE
+              > PRICE_CHANGE > RECEIPT > RENEWAL > PROMOTIONAL > NOTIFICATION > NONE
     """
     for pattern in _FAILED_PAYMENT_PATTERNS:
         if pattern.search(subject):
@@ -165,5 +193,9 @@ def match_pattern(subject: str) -> PatternType:
     for pattern in _PROMOTIONAL_PATTERNS:
         if pattern.search(subject):
             return PatternType.PROMOTIONAL
+
+    for pattern in _NOTIFICATION_PATTERNS:
+        if pattern.search(subject):
+            return PatternType.NOTIFICATION
 
     return PatternType.NONE

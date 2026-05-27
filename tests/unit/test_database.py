@@ -181,7 +181,7 @@ def test_lifecycle_columns_are_null_by_default(conn):
 
 
 def test_update_subscription_lifecycle_first_charge(conn):
-    """first_charge_date uses COALESCE (earliest wins); last_charge_date always overwrites."""
+    """first_charge_date uses MIN semantics (earliest wins); last_charge_date uses MAX semantics (latest wins)."""
     sub_id, _ = upsert_subscription(
         conn, name="Dropbox", amount=11.99, currency="USD",
         billing_cycle="MONTHLY", category="CLOUD", status="ACTIVE", source_provider="MOCK",
@@ -208,6 +208,89 @@ def test_update_subscription_lifecycle_first_charge(conn):
     ).fetchone()
     assert row["first_charge_date"] == "2025-01-01T00:00:00Z", "first_charge_date must not be overwritten"
     assert row["last_charge_date"] == "2025-02-01T00:00:00Z", "last_charge_date must be updated to latest"
+
+
+def test_first_charge_date_min_semantics(conn):
+    """When newer date is processed first (Gmail newest-first order), MIN semantics
+    must still record the oldest date as first_charge_date and newest as last_charge_date."""
+    sub_id, _ = upsert_subscription(
+        conn, name="MinMaxService", amount=9.99, currency="USD",
+        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE", source_provider="MOCK",
+    )
+    conn.commit()
+
+    # Simulate Gmail newest-first: May 22 processed before March 20
+    update_subscription_lifecycle(
+        conn, sub_id,
+        first_charge_date="2026-05-22T10:00:00Z",
+        last_charge_date="2026-05-22T10:00:00Z",
+    )
+    conn.commit()
+    update_subscription_lifecycle(
+        conn, sub_id,
+        first_charge_date="2026-03-20T10:00:00Z",
+        last_charge_date="2026-03-20T10:00:00Z",
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT first_charge_date, last_charge_date FROM subscriptions WHERE subscription_id = ?",
+        (sub_id,),
+    ).fetchone()
+    # MIN: March 20 is earlier → first_charge_date must be March 20
+    assert row["first_charge_date"].startswith("2026-03-20"), (
+        f"first_charge_date should be 2026-03-20 (MIN), got {row['first_charge_date']}"
+    )
+    # MAX: May 22 is later → last_charge_date must be May 22
+    assert row["last_charge_date"].startswith("2026-05-22"), (
+        f"last_charge_date should be 2026-05-22 (MAX), got {row['last_charge_date']}"
+    )
+
+
+def test_last_charge_date_not_overwritten_by_older(conn):
+    """last_charge_date uses MAX semantics: an older date must NOT overwrite a newer one."""
+    sub_id, _ = upsert_subscription(
+        conn, name="MaxService", amount=15.00, currency="USD",
+        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE", source_provider="MOCK",
+    )
+    conn.commit()
+
+    # Set last_charge_date to May 22 (recent)
+    update_subscription_lifecycle(conn, sub_id, last_charge_date="2026-05-22T10:00:00Z")
+    conn.commit()
+    # Then process an older email (March 20) — must NOT overwrite
+    update_subscription_lifecycle(conn, sub_id, last_charge_date="2026-03-20T10:00:00Z")
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT last_charge_date FROM subscriptions WHERE subscription_id = ?",
+        (sub_id,),
+    ).fetchone()
+    assert row["last_charge_date"].startswith("2026-05-22"), (
+        f"last_charge_date should remain 2026-05-22 (MAX), got {row['last_charge_date']}"
+    )
+
+
+def test_lifecycle_dates_idempotent_same_value(conn):
+    """Calling update_subscription_lifecycle with the same date twice must be stable."""
+    sub_id, _ = upsert_subscription(
+        conn, name="IdempotentService", amount=5.00, currency="USD",
+        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE", source_provider="MOCK",
+    )
+    conn.commit()
+
+    date = "2026-04-15T08:00:00Z"
+    update_subscription_lifecycle(conn, sub_id, first_charge_date=date, last_charge_date=date)
+    conn.commit()
+    update_subscription_lifecycle(conn, sub_id, first_charge_date=date, last_charge_date=date)
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT first_charge_date, last_charge_date FROM subscriptions WHERE subscription_id = ?",
+        (sub_id,),
+    ).fetchone()
+    assert row["first_charge_date"] == date, "first_charge_date must be stable after same-value update"
+    assert row["last_charge_date"] == date, "last_charge_date must be stable after same-value update"
 
 
 def test_email_record_stores_event_type(conn):

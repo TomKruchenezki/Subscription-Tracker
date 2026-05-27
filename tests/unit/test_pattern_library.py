@@ -84,3 +84,48 @@ def test_refund_beats_receipt():
     """REFUND has higher priority than RECEIPT."""
     subject = "Refund receipt issued for $9.99"
     assert match_pattern(subject) == PatternType.REFUND
+
+
+# ── NOTIFICATION patterns ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("subject", [
+    "You appeared in 3 searches this week",
+    "Your profile was viewed 5 times",
+    "People you may know on LinkedIn",
+    "You have a new connection request",
+    "Someone endorsed your Python skill",
+    "New job alert: Software Engineer in Tel Aviv",
+    "Update to our User Agreement",
+    "Important update to our Privacy Policy",
+    "Changes to our Terms of Service",
+    "We've updated our Terms and Conditions",
+    "New sign-in from a new device",
+    "New device sign-in detected",
+    "Please verify your email address",
+    "Reset your password",
+    "Security alert: unusual activity",
+    "Your e-ticket for flight LY123",
+    "Your boarding pass is ready",
+    "Your flight booking confirmation",
+    "Hotel reservation confirmation - Marriott",
+    "Reservation confirmation for your stay",
+])
+def test_notification_patterns_suppressed(subject):
+    """Non-subscription notification subjects must match NOTIFICATION pattern."""
+    result = match_pattern(subject)
+    assert result == PatternType.NOTIFICATION, (
+        f"Expected NOTIFICATION for {subject!r}, got {result}"
+    )
+
+
+def test_receipt_beats_notification():
+    """A subject containing both a billing signal and a notification term
+    must return RECEIPT (higher priority), not NOTIFICATION."""
+    subject = "Your LinkedIn Premium receipt - $29.99"
+    assert match_pattern(subject) == PatternType.RECEIPT
+
+
+def test_renewal_beats_notification():
+    """RENEWAL has higher priority than NOTIFICATION."""
+    subject = "Your subscription renewal — security confirmed"
+    assert match_pattern(subject) == PatternType.RENEWAL

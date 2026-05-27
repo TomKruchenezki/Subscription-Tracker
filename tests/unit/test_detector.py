@@ -209,3 +209,39 @@ def test_failed_payment_pattern_detected(conn):
     result = process_email(conn, email)
     assert result.disposition == "DETECTED"
     assert result.event_type == "failed_payment"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.4C: lifecycle date MIN/MAX semantics test
+# ---------------------------------------------------------------------------
+
+def test_lifecycle_dates_correct_when_emails_newest_first(conn):
+    """Gmail processes emails newest-first. first_charge_date must be the oldest date
+    (MIN semantics) and last_charge_date must be the newest date (MAX semantics),
+    regardless of processing order."""
+    # Simulate Gmail newest-first: May 22 email processed before March 20
+    newer = _make_email(
+        "t017a", "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+        "2025-05-22T10:00:00Z",
+    )
+    older = _make_email(
+        "t017b", "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+        "2025-03-20T10:00:00Z",
+    )
+
+    process_email(conn, newer)  # processed first (newest-first order)
+    process_email(conn, older)  # processed second
+
+    subs = get_subscriptions(conn)
+    netflix = [s for s in subs if s["name"] == "Netflix"][0]
+
+    assert netflix["first_charge_date"].startswith("2025-03-20"), (
+        f"first_charge_date should be 2025-03-20 (MIN = oldest charge), "
+        f"got {netflix['first_charge_date']}"
+    )
+    assert netflix["last_charge_date"].startswith("2025-05-22"), (
+        f"last_charge_date should be 2025-05-22 (MAX = most recent charge), "
+        f"got {netflix['last_charge_date']}"
+    )

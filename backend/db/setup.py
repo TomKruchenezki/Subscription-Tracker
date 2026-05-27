@@ -117,18 +117,29 @@ def update_subscription_lifecycle(
     trial_ends_at: str | None = None,
 ) -> None:
     """Update lifecycle timestamp columns on a subscription.
-    first_charge_date and cancelled_at use COALESCE (set once; earliest event wins).
-    last_charge_date always overwrites.
+    first_charge_date uses MIN semantics (earliest date seen ever).
+    last_charge_date uses MAX semantics (most recent date seen).
+    cancelled_at and trial_ends_at use COALESCE (set once; first write wins).
+    Processing order does not matter — results are always correct regardless of
+    whether emails are processed newest-first or oldest-first.
     """
     now = _now()
     fields = []
     params: list = []
     if first_charge_date is not None:
-        fields.append("first_charge_date = COALESCE(first_charge_date, ?)")
-        params.append(first_charge_date)
+        # MIN: keep the earlier of stored vs new (first charge = oldest date ever seen)
+        fields.append("""first_charge_date = CASE
+            WHEN first_charge_date IS NULL OR ? < first_charge_date THEN ?
+            ELSE first_charge_date
+        END""")
+        params.extend([first_charge_date, first_charge_date])
     if last_charge_date is not None:
-        fields.append("last_charge_date = ?")
-        params.append(last_charge_date)
+        # MAX: keep the later of stored vs new (last charge = most recent date ever seen)
+        fields.append("""last_charge_date = CASE
+            WHEN last_charge_date IS NULL OR ? > last_charge_date THEN ?
+            ELSE last_charge_date
+        END""")
+        params.extend([last_charge_date, last_charge_date])
     if cancelled_at is not None:
         fields.append("cancelled_at = COALESCE(cancelled_at, ?)")
         params.append(cancelled_at)

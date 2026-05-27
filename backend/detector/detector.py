@@ -80,6 +80,7 @@ _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
     PatternType.REFUND:         "refund",
     PatternType.PRICE_CHANGE:   "price_change",
     PatternType.PROMOTIONAL:    None,
+    PatternType.NOTIFICATION:   None,
     PatternType.NONE:           None,
 }
 
