@@ -4,7 +4,7 @@ import pytest
 from backend.db.setup import (
     get_connection, upsert_subscription, insert_email_record,
     get_subscriptions, get_subscription_by_id, get_email_records,
-    update_subscription_lifecycle,
+    update_subscription_lifecycle, init_db, create_scan_job,
 )
 
 
@@ -324,3 +324,87 @@ def test_email_record_stores_event_type(conn):
     assert len(records) == 1
     assert records[0]["event_type"] == "renewal_charge"
     assert records[0]["short_evidence"] == "Renewal: USD 9.99/monthly from Spotify"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.5A-hotfix: init_db() migration version regression tests
+#
+# These tests call init_db() directly (NOT the conftest db_path fixture) so they
+# catch the exact bug class where a migration is silently skipped due to a
+# duplicate schema_version number.  The conftest fixture bypasses version checks.
+# ---------------------------------------------------------------------------
+
+def test_init_db_creates_scan_jobs_fresh_db(tmp_path):
+    """On a brand-new DB file, init_db() must create the scan_jobs table."""
+    db = str(tmp_path / "fresh.db")
+    init_db(db)
+    conn = get_connection(db)
+    try:
+        tables = {
+            r[0] for r in
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert "scan_jobs" in tables, (
+            "init_db() must create scan_jobs on a fresh DB — "
+            "check that 003_scan_jobs.sql declares a unique schema_version number"
+        )
+    finally:
+        conn.close()
+
+
+def test_init_db_creates_scan_jobs_idempotent(tmp_path):
+    """Calling init_db() twice on the same DB must not raise and scan_jobs must still exist."""
+    db = str(tmp_path / "idem.db")
+    init_db(db)
+    init_db(db)   # must not raise OperationalError
+    conn = get_connection(db)
+    try:
+        tables = {
+            r[0] for r in
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert "scan_jobs" in tables, "scan_jobs must still exist after calling init_db() twice"
+    finally:
+        conn.close()
+
+
+def test_scan_jobs_schema_version_is_4(tmp_path):
+    """After init_db(), schema_version must contain version=4 (003_scan_jobs.sql)."""
+    db = str(tmp_path / "ver.db")
+    init_db(db)
+    conn = get_connection(db)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM schema_version WHERE version = 4"
+        ).fetchone()
+        assert row is not None, (
+            "schema_version must contain version=4 after applying 003_scan_jobs.sql. "
+            "If version=3 is used instead, 003 collides with 002_lifecycle.sql "
+            "and init_db() skips it."
+        )
+    finally:
+        conn.close()
+
+
+def test_create_scan_job_after_init_db(tmp_path):
+    """create_scan_job() must succeed on a fresh DB initialised with init_db()."""
+    db = str(tmp_path / "create.db")
+    init_db(db)
+    conn = get_connection(db)
+    try:
+        # Must not raise OperationalError: no such table: scan_jobs
+        create_scan_job(
+            conn,
+            scan_id="hotfix-test-001",
+            account_id="user@gmail.com",
+            mode="forensic",
+            scan_range="1y",
+            content_access_level="body_text_ephemeral",
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT scan_id FROM scan_jobs WHERE scan_id = 'hotfix-test-001'"
+        ).fetchone()
+        assert row is not None, "create_scan_job must persist the new row to scan_jobs"
+    finally:
+        conn.close()

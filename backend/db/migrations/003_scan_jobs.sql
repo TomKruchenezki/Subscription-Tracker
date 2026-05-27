@@ -35,4 +35,4 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
 --   Only counts, scan metadata, and the list of Gmail message IDs (opaque strings).
 
 INSERT OR IGNORE INTO schema_version (version, description, applied_at)
-VALUES (3, 'scan_jobs table for background scan progress tracking', datetime('now'));
+VALUES (4, 'scan_jobs table for background scan progress tracking', datetime('now'));
