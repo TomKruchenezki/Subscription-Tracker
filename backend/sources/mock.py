@@ -19,6 +19,7 @@ class MockEmailSource(EmailSource):
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         mode: str = "deep",  # noqa: ARG002 — mode ignored; mock always returns all matching records
+        content_access_level: str = "metadata_plus_snippet",  # noqa: ARG002 — ignored; body_text read from JSON
     ) -> list[EmailMetadata]:
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         emails = []
@@ -40,7 +41,8 @@ class MockEmailSource(EmailSource):
                     sender_name=record.get("sender_name"),
                     subject=record["subject"],
                     email_date=email_date,
-                    snippet=record.get("snippet"),   # optional; None for most existing fixtures
+                    snippet=record.get("snippet"),    # optional; None for most existing fixtures
+                    body_text=record.get("body_text"), # optional; None for most existing fixtures
                 )
             )
         return emails

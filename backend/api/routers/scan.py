@@ -30,6 +30,14 @@ _MODE_REVIEW_THRESHOLD: dict[str, float] = {
     "forensic": 0.30,
 }
 
+# ── Mode → content access level mapping ──────────────────────────────────────
+# Forensic mode reads body text ephemerally; quick/deep use only metadata+snippet.
+_MODE_CONTENT_ACCESS: dict[str, str] = {
+    "quick":    "metadata_plus_snippet",
+    "deep":     "metadata_plus_snippet",
+    "forensic": "body_text_ephemeral",
+}
+
 
 @router.post("/api/scan", response_model=ScanResult)
 def run_scan(
@@ -90,11 +98,13 @@ def run_scan(
             account_id = account_row["account_id"]
 
         # ── Fetch and process ─────────────────────────────────────────────────
+        content_access_level = _MODE_CONTENT_ACCESS[mode]
         source = get_email_source(account_id=account_id)
         emails = source.fetch(
             date_from=effective_date_from,
             date_to=date_to,
             mode=mode,
+            content_access_level=content_access_level,
         )
 
         for email in emails:

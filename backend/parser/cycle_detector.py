@@ -1,9 +1,10 @@
 """
-Detects billing cycle from subject-line keywords, with fallback to snippet.
+Detects billing cycle from subject-line keywords, with fallback to snippet and body_text.
 Returns one of: MONTHLY | ANNUAL | QUARTERLY | WEEKLY | UNKNOWN
 
-Snippet is accepted as a secondary input and is used only for extraction —
-it is NEVER stored, logged, or returned as a raw value.
+Snippet and body_text are accepted as secondary/tertiary inputs and are used only
+for extraction — they are NEVER stored, logged, or returned as raw values.
+Priority: subject → snippet → body_text.
 """
 import re
 from typing import Literal
@@ -45,15 +46,22 @@ _WEEKLY_PATTERNS = [
 ]
 
 
-def detect_cycle(subject: str, snippet: str | None = None) -> BillingCycle:
+def detect_cycle(
+    subject: str,
+    snippet: str | None = None,
+    body_text: str | None = None,
+) -> BillingCycle:
     """Return billing cycle detected from subject keywords, or UNKNOWN.
 
-    Falls back to snippet if subject yields no result. Snippet is
+    Falls back to snippet then body_text if no result found. All inputs are
     processing-time only — never stored or logged.
+    Priority: subject → snippet → body_text.
     """
     texts = [subject]
     if snippet:
         texts.append(snippet)
+    if body_text:
+        texts.append(body_text)
 
     for text in texts:
         # Check QUARTERLY first (more specific than MONTHLY)

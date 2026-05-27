@@ -6,9 +6,11 @@ Returns list[EmailMetadata] — identical shape to MockEmailSource.
 The detection, parsing, and database layers never interact with raw Gmail responses.
 
 Privacy constraints (enforced by tests/privacy/):
-    - ALL messages.get() calls use format="metadata" only (never full/raw/minimal)
+    - _fetch_metadata() uses format="metadata" only — NEVER full/raw/minimal
     - Only headers ["From", "Subject", "Date"] are requested via metadataHeaders
     - The "snippet" field from the API response is read for parser use but NEVER stored
+    - _fetch_body() uses format="full" ONLY for body_text_ephemeral forensic mode;
+      raw body is processed in memory and discarded — NEVER stored, logged, or returned
     - No attachment fetching (messages.attachments not called)
     - No thread fetching (threads.get not called)
     - Access token is never persisted; only the refresh token is stored (in token_store)
@@ -113,13 +115,17 @@ class GmailEmailSource(EmailSource):
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         mode: str = "deep",
+        content_access_level: str = "metadata_plus_snippet",
     ) -> list[EmailMetadata]:
         """Fetch subscription-relevant emails from Gmail using multi-pass queries.
 
         Args:
-            date_from: Only include emails on or after this date.
-            date_to:   Only include emails on or before this date.
-            mode:      "quick" (passes 1-2), "deep" (1-4), "forensic" (1-6).
+            date_from:            Only include emails on or after this date.
+            date_to:              Only include emails on or before this date.
+            mode:                 "quick" (passes 1-2), "deep" (1-4), "forensic" (1-6).
+            content_access_level: "metadata_plus_snippet" (default) or
+                                  "body_text_ephemeral" (forensic only — reads body
+                                  in memory for parsing, discards immediately).
 
         Returns:
             Deduplicated list of EmailMetadata records.
@@ -130,10 +136,11 @@ class GmailEmailSource(EmailSource):
 
         passes = _MODE_PASSES[mode]
         max_messages = _MODE_MAX_MESSAGES[mode]
+        fetch_body = content_access_level == "body_text_ephemeral"
 
         logger.info(
-            "Starting Gmail scan: mode=%s, passes=%s, max=%s",
-            mode, passes, max_messages or "unlimited",
+            "Starting Gmail scan: mode=%s, passes=%s, max=%s, access=%s",
+            mode, passes, max_messages or "unlimited", content_access_level,
         )
 
         # Step 1: Collect all message IDs across passes (deduplicated)
@@ -155,12 +162,17 @@ class GmailEmailSource(EmailSource):
 
         logger.info("Collected %d unique message IDs across %d passes", len(ordered_ids), len(passes))
 
-        # Step 2: Fetch metadata for each unique ID
+        # Step 2: Fetch metadata (and optionally body) for each unique ID
         emails: list[EmailMetadata] = []
         for msg_id in ordered_ids:
             metadata = self._fetch_metadata(msg_id)
-            if metadata is not None:
-                emails.append(metadata)
+            if metadata is None:
+                continue
+            if fetch_body:
+                # PRIVACY: body_text is fetched ephemerally — processed in memory,
+                # never stored in the database, never logged, never returned by API.
+                metadata.body_text = self._fetch_body(msg_id)
+            emails.append(metadata)
 
         logger.info("Fetched metadata for %d emails", len(emails))
         return emails
@@ -259,6 +271,29 @@ class GmailEmailSource(EmailSource):
             snippet=snippet,
         )
 
+    @with_retry()
+    def _fetch_body(self, message_id: str) -> str | None:
+        """Fetch full message body for ephemeral parsing (forensic mode only).
+
+        PRIVACY: format="full" is used ONLY in this method — NEVER in _fetch_metadata().
+        test_no_body_fetch.py verifies this at the AST level.
+
+        The raw Gmail response and all body content are processed in memory and
+        discarded immediately — NEVER stored, logged, or returned to callers.
+        Only the extracted plain-text excerpt (max 2000 chars) is returned.
+        """
+        try:
+            msg = self._service.users().messages().get(
+                userId="me",
+                id=message_id,
+                format="full",
+            ).execute()
+            payload = msg.get("payload", {})
+            return _extract_body_text(payload)
+        except Exception as exc:
+            logger.warning("Failed to fetch body for %s: %s — skipping body", message_id, exc)
+            return None
+
     def _get_account_email(self) -> str:
         """Return the authenticated Gmail address. Cached after first call."""
         if not hasattr(self, "_account_email_cache"):
@@ -282,3 +317,78 @@ def _build_query(
     if date_to:
         parts.append(f"before:{date_to.strftime('%Y/%m/%d')}")
     return " ".join(parts)
+
+
+# ── Ephemeral body-text extraction helpers ────────────────────────────────────
+# These are module-level so test_no_body_fetch.py can verify that format="full"
+# appears only in _fetch_body() (a GmailEmailSource method), not in these helpers.
+
+def _extract_body_text(payload: dict, max_chars: int = 2000) -> str | None:
+    """Walk MIME parts to extract plain text from a Gmail format='full' payload.
+
+    Prefers text/plain; strips text/html as fallback. Binary parts and attachments
+    are skipped. Truncated to max_chars to limit memory use and privacy surface.
+
+    PRIVACY: Raw content is never returned — only the extracted plain-text excerpt.
+    """
+    mime_type = payload.get("mimeType", "")
+
+    # Direct text/plain body
+    if mime_type == "text/plain":
+        data = payload.get("body", {}).get("data", "")
+        return _b64_decode(data)[:max_chars] if data else None
+
+    # text/html fallback — strip tags
+    if mime_type == "text/html":
+        data = payload.get("body", {}).get("data", "")
+        return _strip_html(_b64_decode(data))[:max_chars] if data else None
+
+    # Multipart: recurse, prefer text/plain over text/html
+    if "parts" in payload:
+        plain = None
+        html_fallback = None
+        for part in payload["parts"]:
+            pt = part.get("mimeType", "")
+            if pt == "text/plain" and plain is None:
+                data = part.get("body", {}).get("data", "")
+                if data:
+                    plain = _b64_decode(data)[:max_chars]
+            elif pt == "text/html" and html_fallback is None:
+                data = part.get("body", {}).get("data", "")
+                if data:
+                    html_fallback = _strip_html(_b64_decode(data))[:max_chars]
+            elif pt.startswith("multipart/"):
+                result = _extract_body_text(part, max_chars)
+                if result:
+                    return result
+            # Skip: image/*, application/*, text/calendar, etc.
+        return plain or html_fallback
+
+    return None
+
+
+def _b64_decode(data: str) -> str:
+    """URL-safe base64 decode to UTF-8 text. Returns empty string on failure."""
+    import base64
+    try:
+        return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _strip_html(raw: str) -> str:
+    """Strip HTML tags using stdlib html.parser. Safe for malformed HTML."""
+    import html as _html
+    from html.parser import HTMLParser
+
+    class _Strip(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self._parts: list[str] = []
+
+        def handle_data(self, data: str) -> None:
+            self._parts.append(data)
+
+    p = _Strip()
+    p.feed(_html.unescape(raw))
+    return " ".join(p._parts)

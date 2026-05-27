@@ -1,13 +1,14 @@
 """
 Extracts a subscription amount and currency from an email subject line,
-with fallback to the Gmail snippet when the subject yields no result.
+with fallback to the Gmail snippet and then body_text when the subject yields no result.
 
 Only returns amounts in the plausible subscription range: $0.99 – $9,999.99.
 Returns (None, None) for promotional subjects ("50% off"), out-of-range amounts,
 or text with no detectable amount.
 
-Snippet is accepted as a secondary input and is used only for extraction —
-it is NEVER stored, logged, or returned as a raw value.
+Snippet and body_text are accepted as secondary/tertiary inputs and are used only
+for extraction — they are NEVER stored, logged, or returned as raw values.
+Priority: subject → snippet → body_text.
 """
 import html
 import re
@@ -76,17 +77,26 @@ def _extract_from_text(text: str) -> tuple[float | None, str | None]:
 def extract_amount(
     subject: str,
     snippet: str | None = None,
+    body_text: str | None = None,
 ) -> tuple[float | None, str | None]:
     """Return (amount, currency_code) or (None, None).
 
-    Tries subject first. Falls back to snippet (HTML-unescaped) if subject
-    yields no result. Snippet is processing-time only — never stored or logged.
+    Tries subject first, then snippet, then body_text.
+    All inputs are processing-time only — never stored or logged.
+    Priority: subject → snippet → body_text.
     """
     result = _extract_from_text(subject)
     if result != (None, None):
         return result
 
     if snippet:
-        return _extract_from_text(_clean_snippet(snippet))
+        result = _extract_from_text(_clean_snippet(snippet))
+        if result != (None, None):
+            return result
+
+    if body_text:
+        result = _extract_from_text(_clean_snippet(body_text))
+        if result != (None, None):
+            return result
 
     return (None, None)

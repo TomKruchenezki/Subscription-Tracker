@@ -42,7 +42,7 @@ def test_scan_range_computes_correct_date_from(client, scan_range, expected_days
 
     original_fetch = None
 
-    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep"):
+    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep", content_access_level="metadata_plus_snippet"):
         captured.append({"date_from": date_from, "mode": mode})
         return []
 
@@ -70,7 +70,7 @@ def test_scan_range_computes_correct_date_from(client, scan_range, expected_days
 def test_scan_mode_defaults_to_deep(client):
     captured: list[dict] = []
 
-    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep"):
+    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep", content_access_level="metadata_plus_snippet"):
         captured.append({"mode": mode})
         return []
 
@@ -86,7 +86,7 @@ def test_scan_mode_defaults_to_deep(client):
 def test_scan_mode_passed_to_source_fetch(client, mode):
     captured: list[dict] = []
 
-    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep"):
+    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep", content_access_level="metadata_plus_snippet"):
         captured.append({"mode": mode})
         return []
 
@@ -112,7 +112,7 @@ def test_scan_forensic_mode_uses_lower_threshold(client):
     from backend.models.email_metadata import EmailMetadata
     from datetime import timezone
 
-    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep"):
+    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep", content_access_level="metadata_plus_snippet"):
         # Return one email so process_email is called
         return [EmailMetadata(
             source_message_id="test-msg-1",
@@ -160,7 +160,7 @@ def test_scan_quick_mode_uses_higher_threshold(client):
     captured: list[dict] = []
     from datetime import timezone
 
-    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep"):
+    def _patched_fetch(self, *, date_from=None, date_to=None, mode="deep", content_access_level="metadata_plus_snippet"):
         from backend.models.email_metadata import EmailMetadata
         return [EmailMetadata(
             source_message_id="test-msg-2",

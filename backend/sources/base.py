@@ -13,6 +13,7 @@ class EmailSource(ABC):
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         mode: str = "deep",
+        content_access_level: str = "metadata_plus_snippet",
     ) -> list[EmailMetadata]:
         """Fetch email metadata records, optionally filtered by date range.
 
@@ -22,5 +23,10 @@ class EmailSource(ABC):
             mode: Scan depth — "quick", "deep" (default), or "forensic".
                   MockEmailSource ignores this; GmailEmailSource uses it to
                   select which query passes to run.
+            content_access_level: Controls what content is read from each email.
+                "metadata_plus_snippet" — subject, sender, date, snippet (default).
+                "body_text_ephemeral"   — also fetches full body text ephemerally
+                                          for forensic parsing; raw content is
+                                          discarded immediately, never stored/logged.
         """
         ...

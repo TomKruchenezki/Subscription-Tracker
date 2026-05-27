@@ -57,7 +57,7 @@ def _flag(ok: bool | None, warn: bool = False) -> str:
 
 def _fmt_amount(amount) -> str:
     if amount is None:
-        return "    —  "
+        return "   N/A "   # 7 chars, ASCII-safe — avoids Windows CP1252 encoding issues
     return f"${float(amount):>6.2f}"
 
 

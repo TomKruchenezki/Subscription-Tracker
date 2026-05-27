@@ -73,7 +73,9 @@ export function SpendingSummary({
           </button>
         </div>
         <p style={{ fontSize: "11px", color: "var(--muted)", margin: 0, textAlign: "right" }}>
-          Start with quick + 1m before scanning larger ranges.
+          {scanMode === "forensic"
+            ? "Forensic mode reads email body text in memory for parsing. Raw content is never stored."
+            : "Start with quick + 1m before scanning larger ranges."}
         </p>
       </div>
     </div>

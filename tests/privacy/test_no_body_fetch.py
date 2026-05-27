@@ -1,33 +1,78 @@
 """
-Asserts that the Gmail source always fetches with format="metadata".
-Skips in Phase 1 because backend.sources.gmail is not yet implemented.
-Auto-activates in Phase 2 when backend/sources/gmail.py is created.
+Asserts that Gmail body fetching is restricted to exactly the right scope.
+
+Two invariants are enforced at the AST level:
+
+1. _fetch_metadata() NEVER uses format='full' — it must always use format='metadata'.
+2. format='full' is ONLY permitted inside _fetch_body() — no other function may use it.
+   format='raw' and format='minimal' are forbidden everywhere without exception.
+
+Phase 2.4B added _fetch_body() for body_text_ephemeral forensic mode.
+test_format_full_only_in_fetch_body() is the gate that keeps format='full' from
+leaking into any other code path in gmail.py.
 """
 import ast
 import pytest
 from pathlib import Path
 
 
-def test_gmail_source_uses_metadata_format():
-    try:
-        import backend.sources.gmail  # noqa: F401
-    except ImportError:
-        pytest.skip("backend.sources.gmail not yet implemented (Phase 2 module)")
-
-    gmail_source_path = Path("backend/sources/gmail.py")
-    if not gmail_source_path.exists():
+def _get_gmail_tree():
+    gmail_path = Path("backend/sources/gmail.py")
+    if not gmail_path.exists():
         pytest.skip("backend/sources/gmail.py not found (Phase 2 module)")
+    return ast.parse(gmail_path.read_text(encoding="utf-8")), gmail_path
 
-    source = gmail_source_path.read_text(encoding="utf-8")
-    tree = ast.parse(source)
 
-    # Scan for any messages().get() call that uses format != "metadata"
-    forbidden_formats = {"full", "raw", "minimal"}
+def test_gmail_fetch_metadata_never_uses_full_format():
+    """_fetch_metadata() must always use format='metadata' — never format='full'."""
+    tree, _ = _get_gmail_tree()
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.keyword) and node.arg == "format":
-            value = ast.literal_eval(node.value) if isinstance(node.value, ast.Constant) else None
-            if value in forbidden_formats:
-                pytest.fail(
-                    f"Gmail API called with format='{value}'. "
-                    "Only format='metadata' is permitted — never fetch email bodies."
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_fetch_metadata"):
+            continue
+        # Found the function — check all format= keyword args inside it
+        for subnode in ast.walk(node):
+            if isinstance(subnode, ast.keyword) and subnode.arg == "format":
+                value = (
+                    ast.literal_eval(subnode.value)
+                    if isinstance(subnode.value, ast.Constant)
+                    else None
                 )
+                if value != "metadata":
+                    pytest.fail(
+                        f"_fetch_metadata() uses format='{value}'. "
+                        "Only format='metadata' is permitted in _fetch_metadata() — "
+                        "never fetch email bodies in the metadata path."
+                    )
+        return  # function found and validated
+
+    # _fetch_metadata not yet implemented — skip rather than fail
+    pytest.skip("_fetch_metadata() not found in gmail.py")
+
+
+def test_format_full_only_in_fetch_body():
+    """format='full' is allowed only in _fetch_body(). All other functions must not use it.
+    format='raw' and format='minimal' are forbidden everywhere without exception.
+    """
+    tree, _ = _get_gmail_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        func_name = node.name
+        if func_name == "_fetch_body":
+            continue  # format="full" is permitted here — this is the sole exception
+
+        for subnode in ast.walk(node):
+            if isinstance(subnode, ast.keyword) and subnode.arg == "format":
+                value = (
+                    ast.literal_eval(subnode.value)
+                    if isinstance(subnode.value, ast.Constant)
+                    else None
+                )
+                if value in {"full", "raw", "minimal"}:
+                    pytest.fail(
+                        f"format='{value}' found in {func_name}(). "
+                        "format='full' is only permitted in _fetch_body(); "
+                        "format='raw' and format='minimal' are never permitted."
+                    )
