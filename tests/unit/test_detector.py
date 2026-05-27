@@ -377,3 +377,36 @@ def test_tier1_no_billing_evidence_deep_mode_ignored(conn):
     result = process_email(conn, email, review_threshold=0.40)
     assert result.disposition == "IGNORED"
     assert len(get_subscriptions(conn)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.9: Google Play domain coverage
+# ---------------------------------------------------------------------------
+
+def test_google_play_receipt_detected(conn):
+    """Google Play receipt from google.com → DETECTED after adding google.com to Tier 1."""
+    email = _make_email(
+        "t026", "noreply@google.com",
+        "Your Google Play receipt - $2.99",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Expected DETECTED (google.com is Tier 1 + RECEIPT pattern), got {result.disposition}"
+    )
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["name"] in ("Google", "Google Play")
+
+
+def test_google_com_notification_still_ignored(conn):
+    """google.com + NOTIFICATION subject = 0.25 - 0.45 = 0.00 → IGNORED.
+    Adding google.com to Tier 1 must not cause security/notification emails to be DETECTED."""
+    email = _make_email(
+        "t027", "no-reply@accounts.google.com",
+        "Security alert: new sign-in from a new device",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "IGNORED", (
+        f"Expected IGNORED (NOTIFICATION pattern suppresses Tier 1 score), got {result.disposition}"
+    )
+    assert len(get_subscriptions(conn)) == 0

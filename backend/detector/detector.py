@@ -42,6 +42,7 @@ _CATEGORY_MAP = {
     "Microsoft 365": "CLOUD",
     "Apple": "CLOUD",
     "Google One": "CLOUD",
+    "Google Play": "CLOUD",
     "Google": "CLOUD",
     "Dropbox": "CLOUD",
     "NordVPN": "CLOUD",

@@ -235,3 +235,41 @@ def test_app_install_prompt_is_notification():
 def test_exam_schedule_is_notification():
     """Exam schedule notification → NOTIFICATION."""
     assert match_pattern("Your assessment schedule has been updated") == PatternType.NOTIFICATION
+
+
+# ── Phase 2.9: Promotional offer-price patterns ───────────────────────────────
+
+def test_for_only_price_is_promotional():
+    """'for only $X' upgrade offer language → PROMOTIONAL."""
+    assert match_pattern("Get Pro for only $72") == PatternType.PROMOTIONAL
+
+
+def test_only_price_is_promotional():
+    """'only $X/month' upsell language → PROMOTIONAL."""
+    assert match_pattern("Upgrade today — only $9.99/month") == PatternType.PROMOTIONAL
+
+
+def test_just_price_is_promotional():
+    """'just $X/month' offer language → PROMOTIONAL."""
+    assert match_pattern("Stay protected — just $12/month") == PatternType.PROMOTIONAL
+
+
+def test_starting_at_price_is_promotional():
+    """'starting at $X' offer language → PROMOTIONAL."""
+    assert match_pattern("Plans starting at $9.99/month") == PatternType.PROMOTIONAL
+
+
+def test_get_plan_for_price_is_promotional():
+    """'Get Pro for $X' upgrade offer → PROMOTIONAL (one-word plan name)."""
+    assert match_pattern("Get Pro for $72") == PatternType.PROMOTIONAL
+
+
+def test_receipt_beats_only_language():
+    """A genuine receipt containing 'only $X charged' → RECEIPT wins (higher priority)."""
+    assert match_pattern("Your receipt — only $12.90 charged") == PatternType.RECEIPT
+
+
+def test_renewal_beats_just_language():
+    """A genuine renewal notice with 'just $X/month' language → RENEWAL wins over PROMOTIONAL.
+    Note: RENEWAL is checked before PROMOTIONAL in match_pattern(), so it wins."""
+    assert match_pattern("Your subscription renewed — just $9.99/month") == PatternType.RENEWAL

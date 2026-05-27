@@ -149,6 +149,36 @@ def report(db_path: str, use_mock: bool) -> None:
     else:
         print("\n  By source + disposition: (no records)")
 
+    # ── Provider Detection Stats ──────────────────────────────────────────────
+    print(_header("Provider Detection Stats (GMAIL)"))
+
+    provider_rows = _run(conn, """
+        SELECT s.name, s.status, s.amount, s.billing_cycle,
+               COALESCE(rc.receipt_count, 0) AS confirmed_receipts
+        FROM subscriptions s
+        LEFT JOIN (
+            SELECT subscription_id, COUNT(*) AS receipt_count
+            FROM email_records
+            WHERE event_type IN ('subscription_started', 'renewal_charge')
+            GROUP BY subscription_id
+        ) rc ON rc.subscription_id = s.subscription_id
+        WHERE s.source_provider = 'GMAIL'
+        ORDER BY s.amount DESC
+    """)
+
+    if provider_rows:
+        print(f"  {'Name':<22} {'Status':<10} {'Amount':>7}  {'Cycle':<8}  Receipts")
+        print(f"  {'-'*22} {'-'*10} {'-'*7}  {'-'*8}  --------")
+        for row in provider_rows:
+            name = (row["name"] or "(unknown)")[:22]
+            status = (row["status"] or "—")[:10]
+            amt = _fmt_amount(row["amount"])
+            cycle = (row["billing_cycle"] or "UNKNOWN")[:8]
+            receipts = row["confirmed_receipts"] or 0
+            print(f"  {name:<22} {status:<10} {amt}  {cycle:<8}  {receipts}")
+    else:
+        print("  (no GMAIL subscriptions)")
+
     # ── MOCK Contamination ────────────────────────────────────────────────────
     print(_header("MOCK Contamination"))
 

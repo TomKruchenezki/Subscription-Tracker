@@ -122,6 +122,15 @@ _PROMOTIONAL_PATTERNS = [
     re.compile(r"\blimited\s+time\b", re.IGNORECASE),
     re.compile(r"\bfirst\s+month\s+free\b", re.IGNORECASE),
     re.compile(r"\b(get|save)\s+\d+%\b", re.IGNORECASE),
+    # Upgrade / offer-price language — "for only $X", "just $X/month", etc.
+    # Signals a promotional email, not a billing receipt.
+    # Priority: RECEIPT > PROMOTIONAL, so a genuine "Your receipt — only $X charged"
+    # still matches RECEIPT first and is unaffected.
+    re.compile(r"\bfor\s+only\s+[$€£₪¥₹]", re.IGNORECASE),
+    re.compile(r"\bonly\s+[$€£₪¥₹]\d", re.IGNORECASE),
+    re.compile(r"\bjust\s+[$€£₪¥₹]\d", re.IGNORECASE),
+    re.compile(r"\bstarting\s+(?:at|from)\s+[$€£₪¥₹]", re.IGNORECASE),
+    re.compile(r"\bget\s+\w+\s+for\s+(?:just\s+)?[$€£₪¥₹]", re.IGNORECASE),
 ]
 
 _NOTIFICATION_PATTERNS = [

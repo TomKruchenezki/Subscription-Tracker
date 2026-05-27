@@ -65,7 +65,12 @@ TIER_1: dict[str, str] = {
     "apple.com": "Apple",
 
     # ── Google services ────────────────────────────────────────────────────────
-    # google.com is too broad for general mail, but these billing subdomains are safe
+    # google.com is safe to add as Tier 1 because Phase 2.8 weights (0.25 base)
+    # require billing language to reach DETECTED. google.com + NONE = 0.25 → IGNORED.
+    # google.com + RECEIPT + amount = 0.85 → DETECTED. This allows Google Play receipts
+    # (from noreply@google.com) to be detected correctly.
+    "google.com": "Google",
+    "play.google.com": "Google Play",
     "store.google.com": "Google One",
     "payments.google.com": "Google",
     "notifications.google.com": "Google",

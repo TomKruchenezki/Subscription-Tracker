@@ -41,6 +41,15 @@ _NON_MONETARY_PATTERNS = [
     # Booking / reference / ID patterns — numbers that are identifiers, not prices
     re.compile(r"\b(booking|reference|order|confirmation|ticket|case|transaction|invoice)\s+(?:#|no\.?|number|num|id)?\s*\d{5,}\b", re.IGNORECASE),
     re.compile(r"\b[A-Z]{2,6}-\d{4,}\b"),  # reference codes like TXN-20240115, INV-2024001
+    # Salary / large-number K/M/B notation — not subscription prices.
+    # "_AMOUNT_RE stops at K (not a digit), so ₪37K extracts as ₪37 (37 ILS).
+    # This guard detects the K suffix BEFORE extraction and returns (None, None).
+    re.compile(r"[$€£₪¥₹]\s*\d+(?:\.\d+)?\s*[KMBkmb]\b"),  # ₪37K, $150K, €2.5M
+    re.compile(                                               # "37K NIS", "150K salary"
+        r"\b\d+(?:\.\d+)?\s*[KMBkmb]\s*"
+        r"(?:per\s+(?:month|year|week)|/mo\b|salary|NIS|ILS|USD|EUR|GBP)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 # Currency symbol / code → ISO 4217 code

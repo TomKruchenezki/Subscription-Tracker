@@ -185,3 +185,50 @@ def test_rejects_booking_reference_number():
     amount, currency = extract_amount("Booking confirmation #38291749")
     assert amount is None
     assert currency is None
+
+
+# ── K/M/B suffix salary guard (Phase 2.9) ────────────────────────────────────
+
+def test_rejects_ils_k_suffix():
+    """₪37K salary notation — K suffix means thousands (₪37,000), not ₪37."""
+    amount, currency = extract_amount("משכורת ₪37K לחודש")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_usd_k_suffix():
+    """$150K salary — K suffix signals large non-subscription number."""
+    amount, currency = extract_amount("Salary $150K per year")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_eur_m_suffix():
+    """€2.5M — M (millions) suffix is never a subscription price."""
+    amount, currency = extract_amount("Revenue reached €2.5M this quarter")
+    assert amount is None
+    assert currency is None
+
+
+def test_accepts_ils_without_k_suffix():
+    """₪12.9 (no K suffix) is a legitimate subscription amount."""
+    amount, currency = extract_amount("Spotify charge ₪12.9")
+    assert amount == pytest.approx(12.9)
+    assert currency == "ILS"
+
+
+def test_accepts_usd_without_k_suffix():
+    """$72.00 (no K suffix) is a valid subscription price (e.g. Grammarly annual)."""
+    amount, currency = extract_amount("Annual payment of $72.00")
+    assert amount == pytest.approx(72.0)
+    assert currency == "USD"
+
+
+def test_k_in_snippet_does_not_block_subject_amount():
+    """K-suffix in snippet should not suppress an amount already found in the subject."""
+    amount, currency = extract_amount(
+        subject="Your receipt: $15.49",
+        snippet="Salary ₪37K not relevant",
+    )
+    assert amount == pytest.approx(15.49)
+    assert currency == "USD"
