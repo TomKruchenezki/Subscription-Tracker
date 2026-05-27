@@ -312,5 +312,59 @@ def deactivate_connected_account(conn: sqlite3.Connection, account_id: str) -> N
     )
 
 
+# ── Scan jobs ────────────────────────────────────────────────────────────────
+
+def create_scan_job(
+    conn: sqlite3.Connection,
+    *,
+    scan_id: str,
+    account_id: str | None,
+    mode: str,
+    scan_range: str | None,
+    content_access_level: str,
+) -> None:
+    """Create a new scan job record with status='pending'."""
+    now = _now()
+    conn.execute(
+        """INSERT INTO scan_jobs
+           (scan_id, account_id, mode, scan_range, content_access_level,
+            status, created_at, last_activity_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)""",
+        (scan_id, account_id, mode, scan_range, content_access_level, now, now),
+    )
+
+
+def update_scan_job(conn: sqlite3.Connection, scan_id: str, **fields) -> None:
+    """Update any subset of scan_jobs columns. Always sets last_activity_at=now.
+
+    Example:
+        update_scan_job(conn, sid, status="processing", processed_count=50)
+    """
+    if not fields:
+        return
+    now = _now()
+    cols = list(fields.keys()) + ["last_activity_at"]
+    vals = list(fields.values()) + [now, scan_id]
+    set_clause = ", ".join(f"{c} = ?" for c in cols)
+    conn.execute(
+        f"UPDATE scan_jobs SET {set_clause} WHERE scan_id = ?",
+        vals,
+    )
+
+
+def get_scan_job(conn: sqlite3.Connection, scan_id: str) -> sqlite3.Row | None:
+    """Return a single scan job by ID, or None if not found."""
+    return conn.execute(
+        "SELECT * FROM scan_jobs WHERE scan_id = ?", (scan_id,)
+    ).fetchone()
+
+
+def get_running_scan_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all scan jobs with status pending/collecting/processing."""
+    return conn.execute(
+        "SELECT * FROM scan_jobs WHERE status IN ('pending','collecting','processing')"
+    ).fetchall()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

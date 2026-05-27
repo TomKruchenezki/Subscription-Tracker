@@ -76,3 +76,24 @@ export interface Summary {
   detected_count: number;
   flagged_count: number;
 }
+
+export interface ScanJobStatus {
+  scan_id: string;
+  mode: string;
+  scan_range: string | null;
+  content_access_level: string;
+  status: "pending" | "collecting" | "processing" | "completed" | "failed" | "interrupted";
+  total_ids: number;
+  processed_count: number;
+  detected_count: number;
+  flagged_count: number;
+  ignored_count: number;
+  body_fetched_count: number;
+  body_skipped_count: number;
+  body_failed_count: number;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  last_activity_at: string | null;
+}

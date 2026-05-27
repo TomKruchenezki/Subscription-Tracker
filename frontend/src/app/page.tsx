@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import { SpendingSummary } from "@/components/SpendingSummary";
 import { SubscriptionTable } from "@/components/SubscriptionTable";
-import type { Subscription, Summary, ScanMode, ScanRange, ScanResult } from "@/types/api";
+import type { Subscription, Summary, ScanMode, ScanRange, ScanResult, ScanJobStatus } from "@/types/api";
 
 interface LastScan extends ScanResult {
   mode: ScanMode;
@@ -21,6 +21,10 @@ export default function DashboardPage() {
   const [scanMode, setScanMode] = useState<ScanMode>("quick");
   const [scanRange, setScanRange] = useState<ScanRange>("1m");
   const [lastScan, setLastScan] = useState<LastScan | null>(null);
+
+  // Background scan progress (forensic mode only)
+  const [scanProgress, setScanProgress] = useState<ScanJobStatus | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -40,23 +44,81 @@ export default function DashboardPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Clean up polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
   const handleScan = async () => {
     setScanning(true);
+    setScanProgress(null);
+    setError(null);
+
     try {
-      const result = await api.scan({ mode: scanMode, scan_range: scanRange });
-      setLastScan({ ...result, mode: scanMode, scan_range: scanRange });
-      await loadData();
-      setError(null);
+      if (scanMode === "forensic") {
+        // ── Background scan: start + poll ──────────────────────────────────
+        const job = await api.scanStart({ mode: scanMode, scan_range: scanRange });
+        setScanProgress(job);
+
+        pollRef.current = setInterval(async () => {
+          try {
+            const status = await api.scanStatus(job.scan_id);
+            setScanProgress(status);
+
+            if (["completed", "failed", "interrupted"].includes(status.status)) {
+              stopPolling();
+              setScanning(false);
+
+              if (status.status === "completed") {
+                setLastScan({
+                  scanned: status.processed_count,
+                  detected: status.detected_count,
+                  flagged: status.flagged_count,
+                  ignored: status.ignored_count,
+                  mode: scanMode,
+                  scan_range: scanRange,
+                });
+                await loadData();
+              } else {
+                setError(
+                  status.error_message
+                    ? `Scan ${status.status}: ${status.error_message}`
+                    : `Scan ${status.status}. Safe to re-run.`
+                );
+              }
+            }
+          } catch {
+            // Polling error — don't stop, will retry next interval
+          }
+        }, 3000);
+
+      } else {
+        // ── Synchronous scan: quick / deep ─────────────────────────────────
+        const result = await api.scan({ mode: scanMode, scan_range: scanRange });
+        setLastScan({ ...result, mode: scanMode, scan_range: scanRange });
+        await loadData();
+        setScanning(false);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.includes("409")) {
         setError(
           "No Gmail account connected. Visit the Accounts page to connect Gmail first."
         );
+      } else if (msg.includes("400")) {
+        setError("Background scan requires Gmail mode (USE_MOCK=false).");
       } else {
         setError("Scan failed. Check that the API server is running.");
       }
-    } finally {
       setScanning(false);
     }
   };
@@ -94,6 +156,7 @@ export default function DashboardPage() {
           onScanModeChange={setScanMode}
           scanRange={scanRange}
           onScanRangeChange={setScanRange}
+          scanProgress={scanProgress}
         />
       )}
 

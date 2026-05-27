@@ -14,6 +14,13 @@ Privacy constraints (enforced by tests/privacy/):
     - No attachment fetching (messages.attachments not called)
     - No thread fetching (threads.get not called)
     - Access token is never persisted; only the refresh token is stored (in token_store)
+
+Background scan integration:
+    - fetch_ids() collects deduplicated message IDs without fetching any content.
+      Used by the async background scan job (_run_scan_job in scan_async.py).
+    - _should_fetch_body() is the triage gate for body_text_ephemeral mode.
+      Returns False only when we are confident this is NOT a subscription email.
+      Conservative: returns True when uncertain (false negatives are unacceptable).
 """
 import logging
 from datetime import datetime, timezone
@@ -294,6 +301,54 @@ class GmailEmailSource(EmailSource):
             logger.warning("Failed to fetch body for %s: %s — skipping body", message_id, exc)
             return None
 
+    def fetch_ids(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        mode: str = "forensic",
+    ) -> list[str]:
+        """Collect deduplicated message IDs across all passes for the given mode.
+
+        No content is fetched — this is a pure ID-collection step. Used by the
+        background scan job to get the full list before processing in batches.
+
+        Args:
+            date_from: Only include emails on or after this date.
+            date_to:   Only include emails on or before this date.
+            mode:      "quick" (passes 1-2), "deep" (1-4), "forensic" (1-6).
+                       Note: forensic mode has no message cap (unlimited).
+
+        Returns:
+            List of deduplicated Gmail message IDs.
+        """
+        if mode not in _MODE_PASSES:
+            logger.warning("Unknown scan mode %r in fetch_ids — defaulting to 'forensic'", mode)
+            mode = "forensic"
+
+        passes = _MODE_PASSES[mode]
+        max_messages = _MODE_MAX_MESSAGES[mode]
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+
+        for pass_num in passes:
+            query = _build_query(_PASSES[pass_num], date_from, date_to)
+            new_ids = self._list_message_ids(query, max_messages, seen)
+            for msg_id in new_ids:
+                seen.add(msg_id)
+                ordered.append(msg_id)
+            logger.info(
+                "[fetch_ids] Pass %d/%d: +%d new IDs (%d total unique)",
+                pass_num, len(passes), len(new_ids), len(seen),
+            )
+            if max_messages and len(ordered) >= max_messages:
+                logger.info("[fetch_ids] Message cap %d reached at pass %d", max_messages, pass_num)
+                break
+
+        logger.info("[fetch_ids] Done: %d unique message IDs across %d passes", len(ordered), len(passes))
+        return ordered
+
     def _get_account_email(self) -> str:
         """Return the authenticated Gmail address. Cached after first call."""
         if not hasattr(self, "_account_email_cache"):
@@ -303,6 +358,54 @@ class GmailEmailSource(EmailSource):
             except Exception:
                 self._account_email_cache = self._account_id
         return self._account_email_cache
+
+
+def _should_fetch_body(metadata: "EmailMetadata") -> bool:
+    """Body-fetch triage gate for body_text_ephemeral mode.
+
+    Returns False only when we are confident this email is NOT a subscription
+    (so skipping the body fetch is safe). Returns True when uncertain.
+
+    Conservative by design: false negatives (missing a real subscription) are
+    unacceptable. Only skip when the subject/domain already guarantees IGNORED.
+
+    Skip conditions (returns False):
+        - Excluded domain (tier == -1): scores 0 regardless of body content
+        - NOTIFICATION pattern in subject: confirms non-billing signal
+        - PROMOTIONAL pattern AND Tier 0 sender: promo from unknown sender
+
+    Fetch conditions (returns True):
+        - Tier 1 or Tier 2 sender (known subscription service or payment processor)
+        - Any billing pattern in subject (RECEIPT, RENEWAL, etc.)
+        - PatternType.NONE on any Tier 1/Tier 2 sender (uncertain — fetch)
+    """
+    from backend.detector.sender_list import get_tier
+    from backend.detector.pattern_library import match_pattern, PatternType
+
+    # Extract domain from sender address
+    sender = metadata.sender_address or ""
+    at_idx = sender.find("@")
+    domain = sender[at_idx + 1:].lower() if at_idx != -1 else ""
+
+    tier, _ = get_tier(domain)
+
+    # Excluded domain: detector will score 0 regardless of body
+    if tier == -1:
+        return False
+
+    pattern = match_pattern(metadata.subject)
+
+    # NOTIFICATION: subject already confirms this is not a billing email
+    if pattern == PatternType.NOTIFICATION:
+        return False
+
+    # PROMOTIONAL from unknown sender (Tier 0): not a billing candidate
+    if pattern == PatternType.PROMOTIONAL and tier == 0:
+        return False
+
+    # Everything else: Tier 1/2 senders, billing patterns on any tier, or
+    # PatternType.NONE on Tier 1/2 (uncertain — must fetch to decide)
+    return True
 
 
 def _build_query(

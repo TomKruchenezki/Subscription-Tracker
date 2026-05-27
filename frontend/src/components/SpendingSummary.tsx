@@ -1,5 +1,5 @@
 "use client";
-import type { Summary, ScanMode, ScanRange } from "@/types/api";
+import type { Summary, ScanMode, ScanRange, ScanJobStatus } from "@/types/api";
 
 interface Props {
   summary: Summary;
@@ -9,6 +9,7 @@ interface Props {
   onScanModeChange: (m: ScanMode) => void;
   scanRange: ScanRange;
   onScanRangeChange: (r: ScanRange) => void;
+  scanProgress?: ScanJobStatus | null;
 }
 
 const SELECT_STYLE: React.CSSProperties = {
@@ -29,6 +30,7 @@ export function SpendingSummary({
   onScanModeChange,
   scanRange,
   onScanRangeChange,
+  scanProgress,
 }: Props) {
   return (
     <div style={{ display: "flex", gap: "16px", marginBottom: "24px", flexWrap: "wrap" }}>
@@ -72,11 +74,36 @@ export function SpendingSummary({
             {scanning ? "Scanning…" : "Run scan"}
           </button>
         </div>
-        <p style={{ fontSize: "11px", color: "var(--muted)", margin: 0, textAlign: "right" }}>
-          {scanMode === "forensic"
-            ? "Forensic mode reads email body text in memory for parsing. Raw content is never stored."
-            : "Start with quick + 1m before scanning larger ranges."}
-        </p>
+
+        {/* Live progress (forensic background scan) */}
+        {scanning && scanProgress && (
+          <p style={{ fontSize: "11px", color: "var(--muted)", margin: 0, textAlign: "right" }}>
+            {scanProgress.status === "collecting"
+              ? "Collecting emails…"
+              : scanProgress.status === "processing" || scanProgress.status === "pending"
+              ? [
+                  `${scanProgress.processed_count} / ${scanProgress.total_ids || "?"} processed`,
+                  `${scanProgress.detected_count} detected`,
+                  `${scanProgress.flagged_count} flagged`,
+                  scanProgress.body_fetched_count > 0
+                    ? `${scanProgress.body_fetched_count} bodies read`
+                    : null,
+                  scanProgress.body_skipped_count > 0
+                    ? `${scanProgress.body_skipped_count} skipped`
+                    : null,
+                ].filter(Boolean).join(" · ")
+              : `Scan ${scanProgress.status}`}
+          </p>
+        )}
+
+        {/* Static hint when not scanning */}
+        {!scanning && (
+          <p style={{ fontSize: "11px", color: "var(--muted)", margin: 0, textAlign: "right" }}>
+            {scanMode === "forensic"
+              ? "Forensic mode runs in the background — progress shown above."
+              : "Start with quick + 1m before scanning larger ranges."}
+          </p>
+        )}
       </div>
     </div>
   );

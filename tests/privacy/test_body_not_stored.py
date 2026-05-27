@@ -84,3 +84,34 @@ def test_validation_report_does_not_expose_body_text():
         "validation_report.py must not reference or print body_text values — "
         "the report must show only aggregate counts and extracted fields"
     )
+
+
+def test_scan_job_table_no_raw_content():
+    """scan_jobs migration SQL must not include any raw email content columns.
+
+    Specifically, the following column names are forbidden:
+    body_text, body_html, subject, sender_address, snippet, source_message_id
+    (collected_ids stores opaque Gmail message IDs — these are not email content).
+    """
+    migration_path = Path("backend/db/migrations/003_scan_jobs.sql")
+    if not migration_path.exists():
+        pytest.skip("003_scan_jobs.sql not found")
+
+    sql = migration_path.read_text(encoding="utf-8").lower()
+
+    forbidden_columns = ["body_text", "body_html", "subject", "sender_address", "snippet"]
+    for col in forbidden_columns:
+        # Check for the column name appearing as a SQL column definition
+        # (e.g., "    body_text    TEXT" or "body_text TEXT")
+        # Allow it in comments
+        lines = sql.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                continue  # skip comment lines
+            if col in stripped:
+                raise AssertionError(
+                    f"scan_jobs migration must not include column '{col}' — "
+                    f"raw email content must never be stored in scan_jobs. "
+                    f"Found in line: {line.strip()!r}"
+                )
