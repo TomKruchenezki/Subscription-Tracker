@@ -54,3 +54,6 @@ button.primary { background: var(--accent); border-color: var(--accent); }
 .badge-flagged    { background: #422006; color: var(--yellow); }
 .badge-mock       { background: #1e1b4b; color: #a5b4fc; }
 .badge-gmail      { background: #14532d; color: var(--green); }
+.badge-quick      { background: #1e3a5f; color: #93c5fd; }
+.badge-deep       { background: #1e1b4b; color: #a5b4fc; }
+.badge-forensic   { background: #2d1654; color: #d8b4fe; }

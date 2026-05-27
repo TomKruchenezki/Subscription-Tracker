@@ -20,6 +20,7 @@ export function ReviewQueue({ records }: Props) {
           <th>Date</th>
           <th>Amount</th>
           <th>Confidence</th>
+          <th>Source</th>
         </tr>
       </thead>
       <tbody>
@@ -51,6 +52,11 @@ export function ReviewQueue({ records }: Props) {
                 fontVariantNumeric: "tabular-nums",
               }}>
                 {(record.confidence_score * 100).toFixed(0)}%
+              </span>
+            </td>
+            <td>
+              <span className={`badge badge-${record.source_provider.toLowerCase()}`}>
+                {record.source_provider}
               </span>
             </td>
           </tr>
