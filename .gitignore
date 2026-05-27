@@ -61,3 +61,9 @@ logs/
 *.swo
 .DS_Store
 Thumbs.db
+
+# SQLite runtime files
+*.db-shm
+*.db-wal
+data/*.db-shm
+data/*.db-wal
