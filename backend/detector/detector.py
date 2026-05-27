@@ -25,19 +25,49 @@ AUTO_DETECT_THRESHOLD = float(os.getenv("AUTO_DETECT_THRESHOLD", "0.70"))
 REVIEW_THRESHOLD = float(os.getenv("REVIEW_THRESHOLD", "0.40"))
 
 _CATEGORY_MAP = {
+    # Streaming
     "Netflix": "STREAMING",
     "Spotify": "STREAMING",
     "Hulu": "STREAMING",
     "Disney+": "STREAMING",
     "Max": "STREAMING",
     "Amazon Prime Video": "STREAMING",
+    "YouTube Premium": "STREAMING",
+    # News / Publishing
     "New York Times": "NEWS",
     "Substack": "NEWS",
+    # Cloud / Storage / Security
     "DigitalOcean": "CLOUD",
     "Vercel": "CLOUD",
     "Microsoft 365": "CLOUD",
     "Apple": "CLOUD",
+    "Google One": "CLOUD",
+    "Google": "CLOUD",
     "Dropbox": "CLOUD",
+    "NordVPN": "CLOUD",
+    "Bitwarden": "CLOUD",
+    # SAAS / Productivity
+    "OpenAI": "SAAS",
+    "ChatGPT": "SAAS",
+    "Claude": "SAAS",
+    "GitHub": "SAAS",
+    "GitHub Copilot": "SAAS",
+    "Notion": "SAAS",
+    "Figma": "SAAS",
+    "Zoom": "SAAS",
+    "Slack": "SAAS",
+    "Atlassian": "SAAS",
+    "1Password": "SAAS",
+    "Adobe Creative Cloud": "SAAS",
+    "Monday.com": "SAAS",
+    "Airtable": "SAAS",
+    "Canva": "SAAS",
+    "Wix": "SAAS",
+    "Grammarly": "SAAS",
+    "LinkedIn Premium": "SAAS",
+    "Udemy": "SAAS",
+    "Coursera": "SAAS",
+    "PayPal": "OTHER",
 }
 
 _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {

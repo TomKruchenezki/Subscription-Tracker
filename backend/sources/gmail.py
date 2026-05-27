@@ -7,7 +7,8 @@ The detection, parsing, and database layers never interact with raw Gmail respon
 
 Privacy constraints (enforced by tests/privacy/):
     - ALL messages.get() calls use format="metadata" only (never full/raw/minimal)
-    - Only headers ["From", "Subject", "Date"] are requested — no body, no snippet
+    - Only headers ["From", "Subject", "Date"] are requested via metadataHeaders
+    - The "snippet" field from the API response is read for parser use but NEVER stored
     - No attachment fetching (messages.attachments not called)
     - No thread fetching (threads.get not called)
     - Access token is never persisted; only the refresh token is stored (in token_store)
@@ -30,10 +31,12 @@ _PASSES: dict[int, str] = {
     1: (
         "from:(netflix.com OR spotify.com OR github.com OR notion.so OR figma.com "
         "OR slack.com OR dropbox.com OR adobe.com OR zoom.us OR atlassian.com "
-        "OR openai.com OR apple.com OR google.com OR youtube.com OR hulu.com "
-        "OR disneyplus.com OR max.com OR primevideo.com OR bitwarden.com "
+        "OR openai.com OR anthropic.com OR apple.com OR google.com OR youtube.com "
+        "OR hulu.com OR disneyplus.com OR max.com OR primevideo.com OR bitwarden.com "
         "OR 1password.com OR linear.app OR vercel.com OR digitalocean.com "
-        "OR substack.com OR nytimes.com)"
+        "OR substack.com OR nytimes.com OR canva.com OR wix.com OR udemy.com "
+        "OR coursera.org OR linkedin.com OR grammarly.com OR nordvpn.com "
+        "OR monday.com OR airtable.com OR paypal.com)"
     ),
     2: (
         'subject:(receipt OR invoice OR "payment confirmation" OR "billing statement" '
@@ -236,6 +239,10 @@ class GmailEmailSource(EmailSource):
             logger.debug("Message %s has unparseable Date %r — using now", message_id, date_raw)
             email_date = datetime.now(timezone.utc)
 
+        # Snippet: short body preview included in format="metadata" responses at no extra cost.
+        # Used only for parser extraction — NEVER stored in the database or logged.
+        snippet = msg.get("snippet") or None
+
         # Get the account's email address for source_account_email
         # (cached on first call to avoid repeated API calls)
         account_email = self._get_account_email()
@@ -249,6 +256,7 @@ class GmailEmailSource(EmailSource):
             sender_name=sender_name or None,
             subject=subject,
             email_date=email_date,
+            snippet=snippet,
         )
 
     def _get_account_email(self) -> str:

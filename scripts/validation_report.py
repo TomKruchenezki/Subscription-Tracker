@@ -312,17 +312,23 @@ def report(db_path: str, use_mock: bool) -> None:
             f"{high_conf} item(s) >=70% — review these" if high_conf > 0 else "none"
         ))
 
-    # Data quality
-    checks.append((
-        "Subscriptions with amount",
-        None if missing_amount > 0 else True,
-        f"{missing_amount} missing" if missing_amount else "all present"
-    ))
-    checks.append((
-        "first_charge_date coverage",
-        None if missing_first > 0 else True,
-        f"{missing_first} missing" if missing_first else "all present"
-    ))
+    # Data quality — only meaningful when GMAIL subscriptions exist
+    gmail_sub_count = _run(conn,
+        "SELECT COUNT(*) FROM subscriptions WHERE source_provider='GMAIL'")[0][0]
+    if gmail_sub_count == 0:
+        checks.append(("Subscriptions with amount", None, "N/A — no subscriptions detected yet"))
+        checks.append(("first_charge_date coverage", None, "N/A — no subscriptions detected yet"))
+    else:
+        checks.append((
+            "Subscriptions with amount",
+            None if missing_amount > 0 else True,
+            f"{missing_amount} missing" if missing_amount else "all present"
+        ))
+        checks.append((
+            "first_charge_date coverage",
+            None if missing_first > 0 else True,
+            f"{missing_first} missing" if missing_first else "all present"
+        ))
 
     for label, ok, detail in checks:
         flag_str = _flag(ok is True, warn=(ok is None))

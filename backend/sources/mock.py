@@ -40,6 +40,7 @@ class MockEmailSource(EmailSource):
                     sender_name=record.get("sender_name"),
                     subject=record["subject"],
                     email_date=email_date,
+                    snippet=record.get("snippet"),   # optional; None for most existing fixtures
                 )
             )
         return emails

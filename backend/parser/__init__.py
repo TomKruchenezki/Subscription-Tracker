@@ -5,10 +5,14 @@ from backend.models.email_metadata import EmailMetadata
 
 
 def parse_email_metadata(email: EmailMetadata):
-    """Combine all three parsers and return a ParsedMetadata dict."""
-    amount, currency = extract_amount(email.subject)
+    """Combine all three parsers and return a ParsedMetadata dict.
+
+    Snippet is passed to amount_extractor and cycle_detector as a fallback signal.
+    It is used only for extraction — never stored or logged.
+    """
+    amount, currency = extract_amount(email.subject, snippet=email.snippet)
     canonical_name = resolve_sender(email.sender_address)
-    cycle = detect_cycle(email.subject)
+    cycle = detect_cycle(email.subject, snippet=email.snippet)
     return {
         "canonical_name": canonical_name,
         "amount": amount,

@@ -26,6 +26,9 @@ _FAILED_PAYMENT_PATTERNS = [
     re.compile(r"\bunable\s+to\s+(process|charge)\s+(your\s+)?(payment|card)\b", re.IGNORECASE),
     re.compile(r"\baction\s+required.{0,30}payment\b", re.IGNORECASE),
     re.compile(r"\bbilling\s+(failed|unsuccessful)\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bהתשלום\s+נכשל\b"),          # payment failed
+    re.compile(r"\bאמצעי\s+התשלום\s+נדחה\b"),   # payment method declined
 ]
 
 _REFUND_PATTERNS = [
@@ -34,6 +37,9 @@ _REFUND_PATTERNS = [
     re.compile(r"\byour\s+refund\b", re.IGNORECASE),
     re.compile(r"\bcredit\s+issued\b", re.IGNORECASE),
     re.compile(r"\bamount\s+refunded\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bהחזר\b"),                    # refund
+    re.compile(r"\bזיכוי\b"),                    # credit
 ]
 
 _CANCELLATION_PATTERNS = [
@@ -42,6 +48,9 @@ _CANCELLATION_PATTERNS = [
     re.compile(r"\byou.ve\s+cancell?ed\b", re.IGNORECASE),
     re.compile(r"\bsubscription\s+(has\s+been\s+)?cancell?\w+", re.IGNORECASE),
     re.compile(r"\baccess\s+(has\s+been\s+)?removed\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bביטול\b"),                    # cancellation
+    re.compile(r"\bבוטל\b"),                     # cancelled
 ]
 
 _TRIAL_END_PATTERNS = [
@@ -57,6 +66,9 @@ _TRIAL_STARTED_PATTERNS = [
     re.compile(r"\btrial\s+(is\s+now\s+)?active\b", re.IGNORECASE),
     re.compile(r"\bfree\s+trial\s+started\b", re.IGNORECASE),
     re.compile(r"\byou.ve\s+started\s+(a\s+)?(\w+\s+)?trial\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bניסיון\s+חינם\b"),            # free trial
+    re.compile(r"\bתקופת\s+ניסיון\b"),            # trial period
 ]
 
 _PRICE_CHANGE_PATTERNS = [
@@ -75,6 +87,13 @@ _RECEIPT_PATTERNS = [
     re.compile(r"\bthank\s+you\s+for\s+(your\s+)?(payment|purchase|subscription)\b", re.IGNORECASE),
     re.compile(r"\bbilling\s+(confirmation|statement)\b", re.IGNORECASE),
     re.compile(r"\bcharged\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bקבלה\b"),                     # receipt
+    re.compile(r"\bחשבונית\b"),                  # invoice
+    re.compile(r"\bחויבת\b"),                    # you were charged
+    re.compile(r"\bעסקה\b"),                     # transaction
+    re.compile(r"\bחיוב\b"),                     # charge/billing
+    re.compile(r"\bתשלום\b"),                    # payment
 ]
 
 _RENEWAL_PATTERNS = [
@@ -84,6 +103,10 @@ _RENEWAL_PATTERNS = [
     re.compile(r"\bnext\s+(billing|payment|charge)\b", re.IGNORECASE),
     re.compile(r"\brenews\s+(on|in)\b", re.IGNORECASE),
     re.compile(r"\bauto[\s-]?renew\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bחידוש\s+מנוי\b"),             # subscription renewal
+    re.compile(r"\bהתחדש\b"),                    # renewed
+    re.compile(r"\bמנוי\b"),                     # subscription (general signal)
 ]
 
 _PROMOTIONAL_PATTERNS = [

@@ -47,6 +47,7 @@ class ScanResult(BaseModel):
     detected: int
     flagged: int
     ignored: int
+    content_access_level: str = "metadata_plus_snippet"
 
 
 class Summary(BaseModel):

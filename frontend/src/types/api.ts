@@ -1,4 +1,4 @@
-export type BillingCycle = "MONTHLY" | "ANNUAL" | "WEEKLY" | "UNKNOWN";
+export type BillingCycle = "MONTHLY" | "ANNUAL" | "QUARTERLY" | "WEEKLY" | "UNKNOWN";
 export type Category = "STREAMING" | "SAAS" | "NEWS" | "CLOUD" | "OTHER";
 export type SubscriptionStatus = "ACTIVE" | "CANCELLED" | "PAUSED" | "TRIAL" | "UNKNOWN";
 export type Disposition = "DETECTED" | "FLAGGED" | "IGNORED";
@@ -66,6 +66,7 @@ export interface ScanResult {
   detected: number;
   flagged: number;
   ignored: number;
+  content_access_level?: string;
 }
 
 export interface Summary {

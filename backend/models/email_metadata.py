@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -12,3 +12,6 @@ class EmailMetadata:
     sender_name: str | None
     subject: str
     email_date: datetime
+    # Snippet: short body preview included for free in format="metadata" Gmail responses.
+    # Used only for parser extraction — NEVER stored in the database or logged.
+    snippet: str | None = field(default=None)

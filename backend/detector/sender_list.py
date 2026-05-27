@@ -6,10 +6,22 @@ EXCLUDED: one-time purchase or ambiguous domains — never detect as subscriptio
 
 # Maps sender domain → canonical subscription name
 TIER_1: dict[str, str] = {
+    # ── Streaming ──────────────────────────────────────────────────────────────
     "netflix.com": "Netflix",
     "account.netflix.com": "Netflix",
     "spotify.com": "Spotify",
     "email.spotify.com": "Spotify",
+    "hulu.com": "Hulu",
+    "disneyplus.com": "Disney+",
+    "mail.disneyplus.com": "Disney+",
+    "max.com": "Max",
+    "hbomax.com": "Max",
+    "youtube.com": "YouTube Premium",
+    # Amazon Prime Video is subscription; amazon.com itself is excluded (one-time purchases)
+    "primevideo.com": "Amazon Prime Video",
+    "amazon.co.uk": "Amazon Prime Video",
+
+    # ── Productivity / SAAS ────────────────────────────────────────────────────
     "github.com": "GitHub",
     "copilot.github.com": "GitHub Copilot",
     "notion.so": "Notion",
@@ -17,33 +29,68 @@ TIER_1: dict[str, str] = {
     "figma.com": "Figma",
     "mail.figma.com": "Figma",
     "zoom.us": "Zoom",
-    "adobe.com": "Adobe Creative Cloud",
-    "mail.adobe.com": "Adobe Creative Cloud",
-    "digitalocean.com": "DigitalOcean",
-    "nytimes.com": "New York Times",
-    "substack.com": "Substack",
-    "hulu.com": "Hulu",
-    "dropbox.com": "Dropbox",
     "slack.com": "Slack",
     "atlassian.com": "Atlassian",
     "1password.com": "1Password",
     "linear.app": "Linear",
-    "disneyplus.com": "Disney+",
-    "mail.disneyplus.com": "Disney+",
     "vercel.com": "Vercel",
-    "bitwarden.com": "Bitwarden",
     "monday.com": "Monday.com",
     "airtable.com": "Airtable",
-    "max.com": "Max",
-    "hbomax.com": "Max",
-    # Amazon Prime Video is subscription; amazon.com itself is excluded (one-time purchases)
-    "primevideo.com": "Amazon Prime Video",
-    "amazon.co.uk": "Amazon Prime Video",
-    # Apple billing-specific subdomains only (not apple.com — too broad)
+    "canva.com": "Canva",
+    "mail.canva.com": "Canva",
+    "wix.com": "Wix",
+    "mail.wix.com": "Wix",
+    "grammarly.com": "Grammarly",
+    "mails.grammarly.com": "Grammarly",
+
+    # ── AI services ────────────────────────────────────────────────────────────
+    "openai.com": "OpenAI",
+    "billing.openai.com": "ChatGPT",
+    "anthropic.com": "Claude",
+    "billing.anthropic.com": "Claude",
+
+    # ── Cloud / Storage ────────────────────────────────────────────────────────
+    "dropbox.com": "Dropbox",
+    "bitwarden.com": "Bitwarden",
+    "nordvpn.com": "NordVPN",
+    "info.nordvpn.com": "NordVPN",
+    "digitalocean.com": "DigitalOcean",
+    "substack.com": "Substack",
+    "nytimes.com": "New York Times",
+
+    # ── Apple ──────────────────────────────────────────────────────────────────
+    # appleid.apple.com and email.apple.com for billing receipts
     "appleid.apple.com": "Apple",
     "email.apple.com": "Apple",
+    "apple.com": "Apple",
+
+    # ── Google services ────────────────────────────────────────────────────────
+    # google.com is too broad for general mail, but these billing subdomains are safe
+    "store.google.com": "Google One",
+    "payments.google.com": "Google",
+    "notifications.google.com": "Google",
+
+    # ── Microsoft ──────────────────────────────────────────────────────────────
     "microsoft.com": "Microsoft 365",
     "office.com": "Microsoft 365",
+
+    # ── Adobe ──────────────────────────────────────────────────────────────────
+    "adobe.com": "Adobe Creative Cloud",
+    "mail.adobe.com": "Adobe Creative Cloud",
+
+    # ── Education ──────────────────────────────────────────────────────────────
+    "udemy.com": "Udemy",
+    "mail.udemy.com": "Udemy",
+    "coursera.org": "Coursera",
+    "mail.coursera.org": "Coursera",
+
+    # ── Professional ───────────────────────────────────────────────────────────
+    "linkedin.com": "LinkedIn Premium",
+    "e.linkedin.com": "LinkedIn Premium",
+    "mcee.linkedin.com": "LinkedIn Premium",
+
+    # ── Payment (own subscription receipts) ────────────────────────────────────
+    "paypal.com": "PayPal",
 }
 
 # Maps sender domain → canonical name; lower confidence than Tier 1
@@ -54,8 +101,8 @@ TIER_2: set[str] = {
     "billing.recurly.com",
     "notify.gumroad.com",
     "lemonsqueezy.com",
-    "paypal.com",
     "fastspring.com",
+    # paypal.com moved to Tier 1 (sends its own subscription receipts)
 }
 
 # Domains excluded from subscription detection entirely
