@@ -70,6 +70,12 @@ _CATEGORY_MAP = {
     "PayPal": "OTHER",
 }
 
+# Patterns that constitute strong billing evidence — these create/keep ACTIVE subscriptions.
+# All other patterns reaching DETECTED do not auto-create ACTIVE; they produce
+# event_type="subscription_candidate" or the pattern-specific event type, without
+# changing subscription status.
+_STRONG_BILLING_PATTERNS = frozenset({PatternType.RECEIPT, PatternType.RENEWAL})
+
 _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
     PatternType.RECEIPT:        None,           # resolved at runtime
     PatternType.RENEWAL:        None,           # resolved at runtime
@@ -208,14 +214,16 @@ def process_email(
             event_type = "trial_started"
 
         else:
-            # RECEIPT, RENEWAL, REFUND, FAILED_PAYMENT, PRICE_CHANGE, NONE
-            subscription_id, was_created = upsert_subscription(
-                conn, name=canonical_name, amount=amount, currency=currency,
-                billing_cycle=billing_cycle,
-                category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
-                status="ACTIVE", source_provider=email.source_provider,
-            )
-            if pattern in (PatternType.RECEIPT, PatternType.RENEWAL):
+            # RECEIPT, RENEWAL → strong evidence: create/keep ACTIVE subscription.
+            # All other patterns (REFUND, FAILED_PAYMENT, PRICE_CHANGE, NONE) → do NOT
+            # auto-create ACTIVE; produce event_type only, link to existing sub if any.
+            if pattern in _STRONG_BILLING_PATTERNS:
+                subscription_id, was_created = upsert_subscription(
+                    conn, name=canonical_name, amount=amount, currency=currency,
+                    billing_cycle=billing_cycle,
+                    category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
+                    status="ACTIVE", source_provider=email.source_provider,
+                )
                 event_type = "subscription_started" if was_created else "renewal_charge"
                 update_subscription_lifecycle(
                     conn, subscription_id,
@@ -223,7 +231,21 @@ def process_email(
                     last_charge_date=email_date_str,
                 )
             else:
-                event_type = _PATTERN_TO_EVENT_TYPE.get(pattern, "unknown_payment")
+                # Weak/ambiguous evidence — look up existing subscription if any,
+                # but do NOT create a new ACTIVE subscription from this signal alone.
+                existing = conn.execute(
+                    "SELECT subscription_id FROM subscriptions WHERE name = ? "
+                    "AND source_provider = ?",
+                    (canonical_name, email.source_provider),
+                ).fetchone()
+                if existing:
+                    subscription_id = existing["subscription_id"]
+                    # Don't change status of the existing subscription
+
+                if pattern == PatternType.NONE:
+                    event_type = "subscription_candidate"
+                else:
+                    event_type = _PATTERN_TO_EVENT_TYPE.get(pattern, "unknown_payment")
 
         short_evidence = _make_short_evidence(event_type, canonical_name, amount, currency, billing_cycle)
         insert_email_record(

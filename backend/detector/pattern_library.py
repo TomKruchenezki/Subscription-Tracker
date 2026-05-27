@@ -149,6 +149,19 @@ _NOTIFICATION_PATTERNS = [
     re.compile(r"\bflight\s+(itinerary|confirmation|booking)\b", re.IGNORECASE),
     re.compile(r"\bhotel\s+(confirmation|reservation)\b", re.IGNORECASE),
     re.compile(r"\breservation\s+confirmation\b", re.IGNORECASE),
+    # Grammarly non-billing emails (writing stats/reports — not receipts)
+    re.compile(r"\bwriting\s+(report|stats?|insights?|highlights?|activity|score|goals?)\b", re.IGNORECASE),
+    re.compile(r"\bweekly\s+(writing|grammar|progress)\b", re.IGNORECASE),
+    re.compile(r"\b(grammar|writing|spelling)\s+(score|goals?)\b", re.IGNORECASE),
+    # LinkedIn non-billing emails (career digests, job alerts — not billing)
+    re.compile(r"\bweekly\s+(job|career)\s+(alerts?|digest|picks?|recommendations?)\b", re.IGNORECASE),
+    re.compile(r"\bmonthly\s+(career|job)\s+(digest|newsletter|recap|summary)\b", re.IGNORECASE),
+    re.compile(r"\b(top\s+)?(jobs?|career|opportunities)\s+(for\s+you|this\s+week|recommended)\b", re.IGNORECASE),
+    re.compile(r"\byour\s+(network\s+)?(digest|roundup|weekly|recap)\b", re.IGNORECASE),
+    # Zoom non-billing emails (webinar invites, product tips)
+    re.compile(r"\bzoom\s+(tips?|updates?|news|webinar|feature)\b", re.IGNORECASE),
+    re.compile(r"\b(webinar|virtual\s+event)\s+(invite|invitation|registration|reminder)\b", re.IGNORECASE),
+    re.compile(r"\bjoin\s+(our\s+)?(free\s+)?(webinar|event|online\s+session)\b", re.IGNORECASE),
 ]
 
 

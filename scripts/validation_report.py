@@ -301,6 +301,71 @@ def report(db_path: str, use_mock: bool) -> None:
         print(f"    Score = 0.00 (excluded domain or no signal):  {ignored_zero}")
         print(f"    Score > 0.00 (below review threshold):         {ignored_pos}")
 
+    # ── Suspicious Detections ────────────────────────────────────────────────
+    print(_header("Suspicious Detections (GMAIL)"))
+
+    suspicious = _run(conn, """
+        SELECT s.name, s.amount, s.billing_cycle,
+               s.first_charge_date IS NULL AS missing_first,
+               s.last_charge_date  IS NULL AS missing_last,
+               COALESCE(rc.receipt_count, 0) AS confirmed_receipts
+        FROM subscriptions s
+        LEFT JOIN (
+            SELECT subscription_id, COUNT(*) AS receipt_count
+            FROM email_records
+            WHERE event_type IN ('subscription_started', 'renewal_charge')
+            GROUP BY subscription_id
+        ) rc ON rc.subscription_id = s.subscription_id
+        WHERE s.source_provider = 'GMAIL' AND s.status = 'ACTIVE'
+        ORDER BY s.amount DESC
+    """)
+
+    if suspicious:
+        flags_found = False
+        for row in suspicious:
+            warnings = []
+            if row["billing_cycle"] == "WEEKLY":
+                warnings.append("WEEKLY billing (unusual for subscriptions)")
+            if row["amount"] and row["amount"] > 100:
+                warnings.append("high amount — verify this is real")
+            if row["missing_first"]:
+                warnings.append("no first_charge_date")
+            if row["confirmed_receipts"] == 0:
+                warnings.append("no confirmed receipt/renewal email")
+            if warnings:
+                flags_found = True
+                amt = _fmt_amount(row["amount"])
+                cycle = row["billing_cycle"] or "UNKNOWN"
+                print(f"  WARN  {row['name']:<22} {amt}  {cycle}")
+                for w in warnings:
+                    print(f"          ^ {w}")
+        if not flags_found:
+            print("  All ACTIVE subscriptions have strong evidence.   [PASS]")
+    else:
+        print("  (no ACTIVE GMAIL subscriptions)")
+
+    # ── Evidence Type Summary ─────────────────────────────────────────────────
+    print(_header("Evidence Type Summary (GMAIL ACTIVE)"))
+
+    evidence_rows = _run(conn, """
+        SELECT COALESCE(er.event_type, '(no linked receipt email)') AS et,
+               COUNT(DISTINCT s.subscription_id) AS sub_count
+        FROM subscriptions s
+        LEFT JOIN email_records er ON er.subscription_id = s.subscription_id
+            AND er.event_type IN (
+                'subscription_started', 'renewal_charge', 'subscription_candidate',
+                'unknown_payment', 'trial_started'
+            )
+        WHERE s.source_provider = 'GMAIL' AND s.status = 'ACTIVE'
+        GROUP BY et
+        ORDER BY sub_count DESC
+    """)
+    if evidence_rows:
+        for row in evidence_rows:
+            print(f"  {row['et']:<35} {row['sub_count']} subscription(s)")
+    else:
+        print("  (no ACTIVE GMAIL subscriptions)")
+
     # ── Duplicates ────────────────────────────────────────────────────────────
     print(_header("Duplicates"))
 

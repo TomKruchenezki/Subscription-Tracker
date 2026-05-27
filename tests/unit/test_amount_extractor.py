@@ -121,3 +121,67 @@ def test_body_text_used_when_subject_and_snippet_empty():
     )
     assert amount == pytest.approx(29.00)
     assert currency == "USD"
+
+
+# ── Non-monetary context guards (Phase 2.7) ───────────────────────────────────
+
+def test_rejects_amount_near_profile_views():
+    """Numbers near 'profile views' are not monetary amounts."""
+    amount, currency = extract_amount("30 people viewed your profile this week")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_amount_near_writing_suggestions():
+    """Numbers near 'writing suggestions' are not monetary amounts."""
+    amount, currency = extract_amount("72 writing suggestions corrected this week")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_amount_near_search_count():
+    """Numbers near 'searches' are not monetary amounts."""
+    amount, currency = extract_amount("You appeared in 3 searches this week")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_amount_near_connections():
+    """Numbers near 'connections' are not monetary amounts."""
+    amount, currency = extract_amount("You have 500 connections on LinkedIn")
+    assert amount is None
+    assert currency is None
+
+
+def test_rejects_writing_stats_in_snippet():
+    """Non-monetary guard applies to snippet text as well."""
+    amount, currency = extract_amount(
+        subject="Your Grammarly Weekly Writing Report",
+        snippet="72 advanced writing suggestions this week",
+    )
+    assert amount is None
+    assert currency is None
+
+
+def test_non_monetary_in_snippet_does_not_block_subject():
+    """Non-monetary text in snippet does not suppress amount from subject."""
+    amount, currency = extract_amount(
+        subject="Charge: $12.00",
+        snippet="30 connections viewed your profile",
+    )
+    assert amount == pytest.approx(12.00)
+    assert currency == "USD"
+
+
+def test_payment_amount_is_accepted():
+    """Plain payment amount (no non-monetary context) is accepted normally."""
+    amount, currency = extract_amount("Your payment: $15.49 has been processed")
+    assert amount == pytest.approx(15.49)
+    assert currency == "USD"
+
+
+def test_rejects_booking_reference_number():
+    """Booking reference numbers are not monetary amounts."""
+    amount, currency = extract_amount("Booking confirmation #38291749")
+    assert amount is None
+    assert currency is None

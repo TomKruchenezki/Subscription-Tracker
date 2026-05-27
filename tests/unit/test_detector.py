@@ -245,3 +245,69 @@ def test_lifecycle_dates_correct_when_emails_newest_first(conn):
         f"last_charge_date should be 2025-05-22 (MAX = most recent charge), "
         f"got {netflix['last_charge_date']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.7: Strong ACTIVE gate — only RECEIPT/RENEWAL creates ACTIVE
+# ---------------------------------------------------------------------------
+
+def test_none_pattern_detected_does_not_create_active_subscription(conn):
+    """PatternType.NONE + Tier 1 + amount → DETECTED (score 0.70) but must NOT create
+    an ACTIVE subscription. The ACTIVE gate requires RECEIPT or RENEWAL evidence."""
+    # Tier 1 sender (0.60) + no billing pattern + amount in subject (0.10) = 0.70 → DETECTED
+    email = _make_email(
+        "t018", "no-reply@spotify.com",
+        "Something from Spotify: $9.99",   # no receipt/renewal language
+    )
+    result = process_email(conn, email)
+    # Score should be ≥ 0.70 → DETECTED
+    assert result.disposition == "DETECTED"
+    # ACTIVE subscription must NOT be created from ambiguous evidence
+    subs = get_subscriptions(conn)
+    active_subs = [s for s in subs if s["status"] == "ACTIVE"]
+    assert len(active_subs) == 0, (
+        f"ACTIVE subscription should not be created from PatternType.NONE evidence; "
+        f"got: {[s['name'] for s in active_subs]}"
+    )
+
+
+def test_none_pattern_detected_classifies_as_subscription_candidate(conn):
+    """When PatternType.NONE reaches DETECTED via amount, event_type must be
+    'subscription_candidate' — not 'unknown_payment' or 'subscription_started'."""
+    email = _make_email(
+        "t019", "no-reply@spotify.com",
+        "Something from Spotify: $9.99",
+    )
+    result = process_email(conn, email)
+    assert result.event_type == "subscription_candidate", (
+        f"Expected 'subscription_candidate' for NONE-pattern DETECTED, "
+        f"got '{result.event_type}'"
+    )
+
+
+def test_receipt_pattern_still_creates_active_subscription(conn):
+    """RECEIPT pattern + DETECTED must still create ACTIVE subscription (strong evidence)."""
+    email = _make_email(
+        "t020", "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    subs = get_subscriptions(conn)
+    active_subs = [s for s in subs if s["status"] == "ACTIVE"]
+    assert len(active_subs) == 1, "RECEIPT pattern must create ACTIVE subscription"
+    assert active_subs[0]["name"] == "Netflix"
+
+
+def test_renewal_pattern_still_creates_active_subscription(conn):
+    """RENEWAL pattern + DETECTED must still create ACTIVE subscription (strong evidence)."""
+    email = _make_email(
+        "t021", "email.spotify.com",
+        "Your Spotify Premium subscription renewal - $9.99/mo",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    subs = get_subscriptions(conn)
+    active_subs = [s for s in subs if s["status"] == "ACTIVE"]
+    assert len(active_subs) == 1, "RENEWAL pattern must create ACTIVE subscription"
+    assert active_subs[0]["name"] == "Spotify"

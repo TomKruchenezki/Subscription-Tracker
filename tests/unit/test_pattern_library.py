@@ -129,3 +129,49 @@ def test_renewal_beats_notification():
     """RENEWAL has higher priority than NOTIFICATION."""
     subject = "Your subscription renewal — security confirmed"
     assert match_pattern(subject) == PatternType.RENEWAL
+
+
+# ── Phase 2.7: Grammarly / LinkedIn / Zoom NOTIFICATION patterns ──────────────
+
+@pytest.mark.parametrize("subject", [
+    # Grammarly weekly writing stats (not billing)
+    "Your Grammarly Weekly Writing Report",
+    "Your Grammarly writing activity this week",
+    "Your Grammarly writing score this week",
+    "Grammarly Weekly — Your grammar score",
+    "Your weekly writing stats from Grammarly",
+    # LinkedIn career digest (not billing)
+    "Your weekly career digest from LinkedIn",
+    "Weekly job alerts: top picks for you",
+    "Monthly career digest — new opportunities",
+    "Top jobs for you this week",
+    "Your network digest this week",
+    # Zoom non-billing (webinar/feature)
+    "Join our free Zoom webinar this Thursday",
+    "Zoom tips: get more from your meetings",
+    "Webinar invitation: register now",
+])
+def test_phase27_notification_patterns(subject):
+    """Phase 2.7 NOTIFICATION patterns: Grammarly stats, LinkedIn digests, Zoom webinars."""
+    result = match_pattern(subject)
+    assert result == PatternType.NOTIFICATION, (
+        f"Expected NOTIFICATION for {subject!r}, got {result}"
+    )
+
+
+def test_grammarly_receipt_still_beats_notification():
+    """A genuine Grammarly billing receipt must still be classified as RECEIPT."""
+    subject = "Your Grammarly Premium receipt $12.99"
+    assert match_pattern(subject) == PatternType.RECEIPT
+
+
+def test_linkedin_receipt_still_beats_notification():
+    """A genuine LinkedIn billing receipt must still be classified as RECEIPT."""
+    subject = "Receipt for LinkedIn Premium subscription"
+    assert match_pattern(subject) == PatternType.RECEIPT
+
+
+def test_zoom_payment_beats_notification():
+    """A genuine Zoom payment confirmation must still be classified as RECEIPT."""
+    subject = "Payment confirmation for Zoom Pro — $14.99"
+    assert match_pattern(subject) == PatternType.RECEIPT
