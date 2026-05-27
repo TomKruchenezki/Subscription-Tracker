@@ -109,6 +109,27 @@ def test_refund_beats_receipt():
     "Your flight booking confirmation",
     "Hotel reservation confirmation - Marriott",
     "Reservation confirmation for your stay",
+    # Phase 2.8: job alerts and recruiting
+    "Full Stack Developer at Tech Startup",
+    "Junior Software Engineer position — apply now",
+    "Now hiring: Senior Product Manager",
+    "Open role: Data Analyst at Wix",
+    # Phase 2.8: LinkedIn invitations and social
+    "Adi wants to connect on LinkedIn",
+    "Invitation to connect with Someone",
+    "John has accepted your invitation",
+    "Your application was viewed by recruiter",
+    # Phase 2.8: newsletter / content digest
+    "New post from [Author] in your inbox",
+    "New issue of The Weekly Digest",
+    "Monthly newsletter: top stories this month",
+    "Weekly newsletter from your favorite blog",
+    # Phase 2.8: app install prompts
+    "Download the LinkedIn mobile app",
+    "Install the app and stay connected",
+    # Phase 2.8: exam / schedule notifications
+    "Update Regarding Your Wix Enter Exam Schedule",
+    "Your exam schedule has been updated",
 ])
 def test_notification_patterns_suppressed(subject):
     """Non-subscription notification subjects must match NOTIFICATION pattern."""
@@ -175,3 +196,42 @@ def test_zoom_payment_beats_notification():
     """A genuine Zoom payment confirmation must still be classified as RECEIPT."""
     subject = "Payment confirmation for Zoom Pro — $14.99"
     assert match_pattern(subject) == PatternType.RECEIPT
+
+
+# ── Phase 2.8: New NOTIFICATION pattern safety tests ─────────────────────────
+
+def test_job_alert_does_not_block_receipt():
+    """A subject with both job language and billing language → RECEIPT wins."""
+    subject = "Your LinkedIn Premium receipt — $29.99"
+    assert match_pattern(subject) == PatternType.RECEIPT
+
+
+def test_newsletter_does_not_block_renewal():
+    """A subject containing subscription renewal language wins over newsletter."""
+    subject = "Your Substack Pro newsletter subscription renewed - $8/mo"
+    assert match_pattern(subject) == PatternType.RENEWAL
+
+
+def test_job_opening_is_notification():
+    """'Job opening' subject → NOTIFICATION."""
+    assert match_pattern("New job opening: Senior Engineer") == PatternType.NOTIFICATION
+
+
+def test_linkedin_invitation_is_notification():
+    """LinkedIn connection invitation → NOTIFICATION."""
+    assert match_pattern("Invitation to connect with Jane Doe") == PatternType.NOTIFICATION
+
+
+def test_newsletter_content_is_notification():
+    """New post / newsletter content email → NOTIFICATION."""
+    assert match_pattern("New post from TechBlog in your inbox") == PatternType.NOTIFICATION
+
+
+def test_app_install_prompt_is_notification():
+    """App install prompt → NOTIFICATION."""
+    assert match_pattern("Download the app and get started") == PatternType.NOTIFICATION
+
+
+def test_exam_schedule_is_notification():
+    """Exam schedule notification → NOTIFICATION."""
+    assert match_pattern("Your assessment schedule has been updated") == PatternType.NOTIFICATION

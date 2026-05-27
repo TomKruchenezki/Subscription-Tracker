@@ -162,6 +162,36 @@ _NOTIFICATION_PATTERNS = [
     re.compile(r"\bzoom\s+(tips?|updates?|news|webinar|feature)\b", re.IGNORECASE),
     re.compile(r"\b(webinar|virtual\s+event)\s+(invite|invitation|registration|reminder)\b", re.IGNORECASE),
     re.compile(r"\bjoin\s+(our\s+)?(free\s+)?(webinar|event|online\s+session)\b", re.IGNORECASE),
+    # Job alerts and recruiting (LinkedIn, Wix, etc.)
+    re.compile(r"\bjob\s+(opening|opportunity)\b", re.IGNORECASE),
+    re.compile(r"\b(new\s+)?(job|career)\s+opportunit", re.IGNORECASE),
+    re.compile(r"\bnow\s+hiring\b", re.IGNORECASE),
+    re.compile(r"\bopen\s+(role|position)\b", re.IGNORECASE),
+    re.compile(r"\b(recruiter|recruiting)\s+(message|outreach|reached)\b", re.IGNORECASE),
+    re.compile(r"\b(junior|senior|lead|staff|principal|mid[\s-]level)\s+\w+\s+"
+               r"(engineer|developer|manager|analyst|designer)\b", re.IGNORECASE),
+    re.compile(r"\b(full[\s-]?stack|front[\s-]?end|back[\s-]?end)\s+"
+               r"(developer|engineer)\b", re.IGNORECASE),
+    # LinkedIn invitations and social signals
+    re.compile(r"\bwants\s+to\s+connect\b", re.IGNORECASE),
+    re.compile(r"\binvitation\s+to\s+connect\b", re.IGNORECASE),
+    re.compile(r"\bi['’]d\s+like\s+to\s+(add|connect)\b", re.IGNORECASE),
+    re.compile(r"\b(has\s+)?accepted\s+your\s+invitation\b", re.IGNORECASE),
+    re.compile(r"\b(application|candidacy)\s+(was\s+)?(viewed|received|reviewed)\b", re.IGNORECASE),
+    # Newsletter / content digest (Substack, etc.)
+    re.compile(r"\bnew\s+post\s+(from|by|in)\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+issue\s+(of|from)\b", re.IGNORECASE),
+    re.compile(r"\b(has\s+)?(published|posted|sent)\s+(a\s+)?new\s+"
+               r"(post|essay|issue|article|story)\b", re.IGNORECASE),
+    re.compile(r"\bmonthly\s+newsletter\b", re.IGNORECASE),
+    re.compile(r"\bweekly\s+newsletter\b", re.IGNORECASE),
+    # App install and product update prompts
+    re.compile(r"\bget\s+the\s+\w+\s+app\b", re.IGNORECASE),
+    re.compile(r"\bdownload\s+the\b.{0,20}\bapp\b", re.IGNORECASE),
+    re.compile(r"\binstall\s+the\s+app\b", re.IGNORECASE),
+    # Exam / schedule notifications (Wix, etc.)
+    re.compile(r"\b(exam|test|assessment)\s+schedule\b", re.IGNORECASE),
+    re.compile(r"\benter\s+exam\b", re.IGNORECASE),
 ]
 
 

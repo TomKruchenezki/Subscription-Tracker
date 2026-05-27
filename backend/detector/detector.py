@@ -218,11 +218,14 @@ def process_email(
             # All other patterns (REFUND, FAILED_PAYMENT, PRICE_CHANGE, NONE) → do NOT
             # auto-create ACTIVE; produce event_type only, link to existing sub if any.
             if pattern in _STRONG_BILLING_PATTERNS:
+                # ACTIVE requires an extracted amount. Without one, create as UNKNOWN —
+                # upgrades to ACTIVE automatically when a later receipt provides an amount.
+                effective_status = "ACTIVE" if amount is not None else "UNKNOWN"
                 subscription_id, was_created = upsert_subscription(
                     conn, name=canonical_name, amount=amount, currency=currency,
                     billing_cycle=billing_cycle,
                     category=_CATEGORY_MAP.get(canonical_name, "SAAS"),
-                    status="ACTIVE", source_provider=email.source_provider,
+                    status=effective_status, source_provider=email.source_provider,
                 )
                 event_type = "subscription_started" if was_created else "renewal_charge"
                 update_subscription_lifecycle(

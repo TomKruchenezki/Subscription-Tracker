@@ -488,6 +488,17 @@ def report(db_path: str, use_mock: bool) -> None:
         f"{date_inversion_count} inverted (first > last)" if date_inversion_count > 0 else "all correct"
     ))
 
+    # ACTIVE subscriptions must have an amount (Phase 2.8 gate)
+    active_no_amount = _run(conn,
+        """SELECT COUNT(*) FROM subscriptions
+           WHERE status='ACTIVE' AND amount IS NULL AND source_provider='GMAIL'""")[0][0]
+    checks.append((
+        "ACTIVE subs with no amount",
+        active_no_amount == 0,
+        f"{active_no_amount} ACTIVE row(s) with NULL amount" if active_no_amount
+        else "all ACTIVE rows have amount"
+    ))
+
     for label, ok, detail in checks:
         flag_str = _flag(ok is True, warn=(ok is None))
         print(f"  {label:<38} {flag_str:<5}  ({detail})")

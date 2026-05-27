@@ -251,38 +251,32 @@ def test_lifecycle_dates_correct_when_emails_newest_first(conn):
 # Phase 2.7: Strong ACTIVE gate — only RECEIPT/RENEWAL creates ACTIVE
 # ---------------------------------------------------------------------------
 
-def test_none_pattern_detected_does_not_create_active_subscription(conn):
-    """PatternType.NONE + Tier 1 + amount → DETECTED (score 0.70) but must NOT create
-    an ACTIVE subscription. The ACTIVE gate requires RECEIPT or RENEWAL evidence."""
-    # Tier 1 sender (0.60) + no billing pattern + amount in subject (0.10) = 0.70 → DETECTED
+def test_tier1_no_billing_evidence_ignored(conn):
+    """Tier 1 + NONE + amount = 0.25 + 0.00 + 0.10 = 0.35 → IGNORED at default
+    threshold (0.40). Known domain alone is no longer sufficient to DETECT or FLAG."""
     email = _make_email(
         "t018", "no-reply@spotify.com",
         "Something from Spotify: $9.99",   # no receipt/renewal language
     )
     result = process_email(conn, email)
-    # Score should be ≥ 0.70 → DETECTED
-    assert result.disposition == "DETECTED"
-    # ACTIVE subscription must NOT be created from ambiguous evidence
-    subs = get_subscriptions(conn)
-    active_subs = [s for s in subs if s["status"] == "ACTIVE"]
-    assert len(active_subs) == 0, (
-        f"ACTIVE subscription should not be created from PatternType.NONE evidence; "
-        f"got: {[s['name'] for s in active_subs]}"
+    assert result.disposition == "IGNORED", (
+        f"Expected IGNORED (score 0.35 < threshold 0.40), got {result.disposition}"
     )
+    assert len(get_subscriptions(conn)) == 0
 
 
-def test_none_pattern_detected_classifies_as_subscription_candidate(conn):
-    """When PatternType.NONE reaches DETECTED via amount, event_type must be
-    'subscription_candidate' — not 'unknown_payment' or 'subscription_started'."""
+def test_tier1_no_billing_evidence_forensic_flagged(conn):
+    """Tier 1 + NONE + amount = 0.35 → FLAGGED in forensic mode (threshold 0.30)."""
     email = _make_email(
         "t019", "no-reply@spotify.com",
         "Something from Spotify: $9.99",
     )
-    result = process_email(conn, email)
-    assert result.event_type == "subscription_candidate", (
-        f"Expected 'subscription_candidate' for NONE-pattern DETECTED, "
-        f"got '{result.event_type}'"
+    result = process_email(conn, email, review_threshold=0.30)
+    assert result.disposition == "FLAGGED", (
+        f"Expected FLAGGED in forensic mode (score 0.35 ≥ threshold 0.30), "
+        f"got {result.disposition}"
     )
+    assert len(get_subscriptions(conn)) == 0
 
 
 def test_receipt_pattern_still_creates_active_subscription(conn):
@@ -311,3 +305,75 @@ def test_renewal_pattern_still_creates_active_subscription(conn):
     active_subs = [s for s in subs if s["status"] == "ACTIVE"]
     assert len(active_subs) == 1, "RENEWAL pattern must create ACTIVE subscription"
     assert active_subs[0]["name"] == "Spotify"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.8: ACTIVE gate — RECEIPT/RENEWAL with NULL amount → UNKNOWN status
+# ---------------------------------------------------------------------------
+
+def test_receipt_no_amount_creates_unknown_not_active(conn):
+    """RECEIPT pattern + no extractable amount → DETECTED but status=UNKNOWN, not ACTIVE."""
+    email = _make_email(
+        "t022", "billing@account.netflix.com",
+        "Your Netflix membership receipt",   # receipt language but no $ amount
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1, "A subscription row should be created"
+    assert subs[0]["status"] == "UNKNOWN", (
+        f"RECEIPT with no amount must create UNKNOWN status, got {subs[0]['status']}"
+    )
+
+
+def test_receipt_with_amount_creates_active(conn):
+    """RECEIPT pattern + extractable amount → DETECTED and status=ACTIVE."""
+    email = _make_email(
+        "t023", "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["status"] == "ACTIVE", (
+        f"RECEIPT with amount must create ACTIVE status, got {subs[0]['status']}"
+    )
+
+
+def test_unknown_upgrades_to_active_on_receipt_with_amount(conn):
+    """Processing a no-amount receipt first (→ UNKNOWN), then a receipt with amount
+    (→ ACTIVE) upgrades the subscription to ACTIVE."""
+    no_amt = _make_email(
+        "t024a", "billing@account.netflix.com",
+        "Your Netflix membership receipt",     # receipt language but no amount → UNKNOWN
+        "2025-04-01T08:00:00Z",
+    )
+    with_amt = _make_email(
+        "t024b", "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",   # amount → ACTIVE
+        "2025-05-01T08:00:00Z",
+    )
+    process_email(conn, no_amt)
+    subs_after_first = get_subscriptions(conn)
+    assert subs_after_first[0]["status"] == "UNKNOWN"
+
+    process_email(conn, with_amt)
+    subs_after_second = get_subscriptions(conn)
+    netflix = [s for s in subs_after_second if s["name"] == "Netflix"]
+    assert len(netflix) == 1
+    assert netflix[0]["status"] == "ACTIVE", (
+        f"Subscription should upgrade from UNKNOWN to ACTIVE after receipt with amount, "
+        f"got {netflix[0]['status']}"
+    )
+
+
+def test_tier1_no_billing_evidence_deep_mode_ignored(conn):
+    """Tier 1 + NONE + amount = 0.35 → IGNORED at deep mode threshold (0.40)."""
+    email = _make_email(
+        "t025", "no-reply@spotify.com",
+        "Something from Spotify: $9.99",
+    )
+    result = process_email(conn, email, review_threshold=0.40)
+    assert result.disposition == "IGNORED"
+    assert len(get_subscriptions(conn)) == 0
