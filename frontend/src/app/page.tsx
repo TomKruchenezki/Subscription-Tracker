@@ -47,8 +47,15 @@ export default function DashboardPage() {
       setLastScan({ ...result, mode: scanMode, scan_range: scanRange });
       await loadData();
       setError(null);
-    } catch {
-      setError("Scan failed. Check that the API server is running.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes("409")) {
+        setError(
+          "No Gmail account connected. Visit the Accounts page to connect Gmail first."
+        );
+      } else {
+        setError("Scan failed. Check that the API server is running.");
+      }
     } finally {
       setScanning(false);
     }

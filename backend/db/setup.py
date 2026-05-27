@@ -263,6 +263,15 @@ def get_connected_account(conn: sqlite3.Connection, account_id: str) -> sqlite3.
     ).fetchone()
 
 
+def get_active_gmail_account(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Return the first active GMAIL account (oldest by created_at), or None."""
+    return conn.execute(
+        """SELECT * FROM connected_accounts
+           WHERE source_provider = 'GMAIL' AND is_active = 1
+           ORDER BY created_at LIMIT 1"""
+    ).fetchone()
+
+
 def upsert_connected_account(
     conn: sqlite3.Connection,
     *,

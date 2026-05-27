@@ -1,12 +1,13 @@
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.api.routers._db import get_conn, ensure_db
 from backend.sources.factory import get_email_source
 from backend.detector.detector import process_email
-from backend.db.setup import get_summary
+from backend.db.setup import get_summary, get_active_gmail_account
 from backend.models.subscription import ScanResult, Summary
 
 router = APIRouter()
@@ -58,6 +59,8 @@ def run_scan(
       - forensic: passes 1–6, threshold 0.30 (maximum recall)
 
     scan_range shortcuts (e.g. "3m" = last 90 days) take precedence over date_from.
+
+    Returns 409 if USE_MOCK=false and no active Gmail account is connected.
     """
     ensure_db()
 
@@ -67,17 +70,33 @@ def run_scan(
         effective_date_from = datetime.now(timezone.utc) - timedelta(days=_RANGE_DAYS[scan_range])
 
     review_threshold = _MODE_REVIEW_THRESHOLD.get(mode, 0.40)
-
-    source = get_email_source()
-    emails = source.fetch(
-        date_from=effective_date_from,
-        date_to=date_to,
-        mode=mode,
-    )
+    use_mock = os.getenv("USE_MOCK", "true").lower() not in {"false", "0", "no"}
 
     counts = {"scanned": 0, "detected": 0, "flagged": 0, "ignored": 0}
 
     with get_conn() as conn:
+        # ── Gmail account resolution (skipped in mock mode) ───────────────────
+        account_id: str | None = None
+        if not use_mock:
+            account_row = get_active_gmail_account(conn)
+            if account_row is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "No active Gmail account connected. "
+                        "Visit /accounts to connect Gmail first."
+                    ),
+                )
+            account_id = account_row["account_id"]
+
+        # ── Fetch and process ─────────────────────────────────────────────────
+        source = get_email_source(account_id=account_id)
+        emails = source.fetch(
+            date_from=effective_date_from,
+            date_to=date_to,
+            mode=mode,
+        )
+
         for email in emails:
             result = process_email(conn, email, review_threshold=review_threshold)
             counts["scanned"] += 1

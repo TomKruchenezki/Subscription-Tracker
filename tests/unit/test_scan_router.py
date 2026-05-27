@@ -16,6 +16,16 @@ def client(db_path):
     return TestClient(app)
 
 
+@pytest.fixture()
+def gmail_client(db_path):
+    """TestClient with USE_MOCK=false for Gmail account selection tests."""
+    import os
+    os.environ["DB_PATH"] = db_path
+    os.environ["USE_MOCK"] = "false"
+    from backend.api.app import app
+    return TestClient(app)
+
+
 # ── Scan range shortcuts ───────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("scan_range,expected_days", [
@@ -184,3 +194,66 @@ def test_scan_quick_mode_uses_higher_threshold(client):
 
     assert resp.status_code == 200
     assert captured[0]["review_threshold"] == pytest.approx(0.50)
+
+
+# ── Gmail account selection ────────────────────────────────────────────────────
+
+def test_scan_gmail_no_account_returns_409(gmail_client):
+    """USE_MOCK=false + no Gmail account in DB → 409 with helpful message."""
+    with patch("backend.api.routers.scan.get_active_gmail_account", return_value=None):
+        resp = gmail_client.post("/api/scan?mode=quick&scan_range=1m")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "Gmail" in detail
+
+
+def test_scan_gmail_uses_active_account_id(gmail_client):
+    """USE_MOCK=false + one Gmail account → account_id is passed to get_email_source."""
+    captured: list[str | None] = []
+    fake_row = {"account_id": "user@gmail.com", "source_provider": "GMAIL", "is_active": 1}
+
+    def fake_source(account_id=None):
+        captured.append(account_id)
+        mock_src = MagicMock()
+        mock_src.fetch.return_value = []
+        return mock_src
+
+    with (
+        patch("backend.api.routers.scan.get_active_gmail_account", return_value=fake_row),
+        patch("backend.api.routers.scan.get_email_source", side_effect=fake_source),
+    ):
+        resp = gmail_client.post("/api/scan?mode=quick&scan_range=1m")
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0] == "user@gmail.com"
+
+
+def test_scan_gmail_multiple_accounts_uses_first(gmail_client):
+    """Multiple Gmail accounts → the account returned by get_active_gmail_account is used."""
+    captured: list[str | None] = []
+    # get_active_gmail_account is LIMIT 1 ORDER BY created_at, so first account wins
+    fake_row = {"account_id": "first@gmail.com", "source_provider": "GMAIL", "is_active": 1}
+
+    def fake_source(account_id=None):
+        captured.append(account_id)
+        mock_src = MagicMock()
+        mock_src.fetch.return_value = []
+        return mock_src
+
+    with (
+        patch("backend.api.routers.scan.get_active_gmail_account", return_value=fake_row),
+        patch("backend.api.routers.scan.get_email_source", side_effect=fake_source),
+    ):
+        resp = gmail_client.post("/api/scan?mode=quick&scan_range=1m")
+
+    assert resp.status_code == 200
+    assert captured[0] == "first@gmail.com"
+
+
+def test_scan_mock_mode_skips_gmail_account_lookup(client):
+    """USE_MOCK=true → get_active_gmail_account is never called."""
+    with patch("backend.api.routers.scan.get_active_gmail_account") as mock_lookup:
+        resp = client.post("/api/scan")
+    assert resp.status_code == 200
+    mock_lookup.assert_not_called()
