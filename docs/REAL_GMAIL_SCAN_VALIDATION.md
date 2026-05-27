@@ -56,6 +56,33 @@ Copy one session block per scan run.
 | Highest confidence score seen | |
 | Lowest confidence score seen | |
 
+**Source breakdown (run after scan):**
+```sql
+SELECT source_provider, disposition, COUNT(*) as cnt
+FROM email_records GROUP BY source_provider, disposition;
+```
+
+| source_provider | DETECTED | FLAGGED | IGNORED |
+|-----------------|----------|---------|---------|
+| GMAIL           |          |         |         |
+| MOCK            |          |         |         |
+
+Expected: only GMAIL rows when USE_MOCK=false. Any MOCK rows here while running Gmail mode is a bug.
+
+**Checklist comparison:**
+
+| Service (from checklist) | Found in subscriptions? | Found in Review Queue? | Missing entirely? |
+|--------------------------|------------------------|----------------------|-------------------|
+|                          |                        |                      |                   |
+
+"Missing entirely" = not in detected or flagged AND email would fall within this date range → false negative.
+
+**False positive candidates (DETECTED or FLAGGED but not a real subscription):**
+- (none — or describe: service name, confidence score, why it is a false positive)
+
+**False negative candidates (on checklist but absent from results):**
+- (none — or describe: service name, why it may be missing)
+
 **Backend terminal — notable lines:**
 ```
 # Paste relevant log lines here (stats only — no subjects/senders)
@@ -71,6 +98,12 @@ Copy one session block per scan run.
 - [ ] No HttpError 401/403 in terminal
 - [ ] At least 1 checklist item appeared (detected or flagged)
 - [ ] Privacy tests still green: `pytest tests/privacy/ -v`
+- [ ] Source breakdown shows GMAIL rows only (no MOCK contamination)
+
+**Do not advance if:**
+- Any checklist item is missing entirely and its email would be within this 1m window — investigate before widening
+- Review Queue is empty after a scan with real emails (unexpectedly zero flagged rows)
+- MOCK rows appear in the source breakdown while USE_MOCK=false
 
 **Issues noted:**
 
@@ -106,6 +139,29 @@ GROUP BY name HAVING cnt > 1;
 ```
 Result (rows returned): ____  (expected: 0)
 
+**Source breakdown (run after scan):**
+```sql
+SELECT source_provider, disposition, COUNT(*) as cnt
+FROM email_records GROUP BY source_provider, disposition;
+```
+
+| source_provider | DETECTED | FLAGGED | IGNORED |
+|-----------------|----------|---------|---------|
+| GMAIL           |          |         |         |
+| MOCK            |          |         |         |
+
+**Checklist comparison:**
+
+| Service (from checklist) | Found in subscriptions? | Found in Review Queue? | Missing entirely? |
+|--------------------------|------------------------|----------------------|-------------------|
+|                          |                        |                      |                   |
+
+**False positive candidates:**
+- (none — or describe: service name, confidence score, why it is a false positive)
+
+**False negative candidates:**
+- (none — or describe: service name, why it may be missing)
+
 **Backend terminal — notable lines:**
 ```
 ```
@@ -116,6 +172,12 @@ Result (rows returned): ____  (expected: 0)
 - [ ] No duplicate subscription rows (dedup query returns 0)
 - [ ] No rate-limit errors (HTTP 429)
 - [ ] Privacy tests still green
+- [ ] Source breakdown shows GMAIL rows only
+
+**Do not advance if:**
+- A checklist item is missing entirely that had active emails in the 3m window
+- Review Queue is empty with USE_MOCK=false (zero flagged rows is suspicious for any real mailbox)
+- MOCK rows appear in the source breakdown
 
 **Issues noted:**
 
@@ -162,12 +224,30 @@ Results:
 ```
 ```
 
+**Checklist comparison:**
+
+| Service (from checklist) | Found in subscriptions? | Found in Review Queue? | Missing entirely? |
+|--------------------------|------------------------|----------------------|-------------------|
+|                          |                        |                      |                   |
+
+**False positive candidates:**
+- (none — or describe: service name, confidence score, why it is a false positive)
+
+**False negative candidates (especially cancelled or older services):**
+- (none — or describe: service name, why it may be missing)
+
 **Pass criteria check:**
 - [ ] No server crash
 - [ ] 6m results are a superset of 3m results (detected ≥ deep+3m)
 - [ ] No duplicate rows
 - [ ] No persistent 429 errors
 - [ ] Privacy tests still green
+- [ ] Source breakdown shows GMAIL rows only
+
+**Do not advance if:**
+- Cancelled subscription appears in subscriptions table but `cancelled_at` is NULL (lifecycle tracking broken)
+- Any checklist item missing entirely that had active emails within 6 months
+- Dedup query returns > 0
 
 **Issues noted:**
 
@@ -193,11 +273,46 @@ Results:
 - Earliest: ____
 - Latest: ____
 
+**Source breakdown (run after scan):**
+```sql
+SELECT source_provider, disposition, COUNT(*) as cnt
+FROM email_records GROUP BY source_provider, disposition;
+```
+
+| source_provider | DETECTED | FLAGGED | IGNORED |
+|-----------------|----------|---------|---------|
+| GMAIL           |          |         |         |
+| MOCK            |          |         |         |
+
 **New subscriptions (not in 6m scan):**
 
 | Service | Amount | Cycle | Status |
 |---------|--------|-------|--------|
 |         |        |       |        |
+
+**Checklist comparison:**
+
+| Service (from checklist) | Found in subscriptions? | Found in Review Queue? | Missing entirely? |
+|--------------------------|------------------------|----------------------|-------------------|
+|                          |                        |                      |                   |
+
+**False positive candidates:**
+- (none — or describe)
+
+**False negative candidates (especially old/cancelled subscriptions > 6 months ago):**
+- (none — or describe)
+
+**Pass criteria check:**
+- [ ] No server crash
+- [ ] detected ≥ deep+6m detected count
+- [ ] No duplicate rows
+- [ ] first_charge_date range looks plausible (earliest date makes sense for your account history)
+- [ ] No persistent 429 errors
+- [ ] Privacy tests still green
+
+**Do not advance further if:**
+- Scan took > 5 minutes (may indicate need for progress indicator before going deeper)
+- Unexpected spike in flagged items (>3× more than 6m) without obvious explanation
 
 **Issues noted:**
 
@@ -241,12 +356,27 @@ After each scan, run through these steps at `/review`:
 
 1. **Count GMAIL rows** — visually scan the Source column for green GMAIL badges
 2. **Group by confidence band:**
-   - 70%+ and FLAGGED: potential detection bug (should have been DETECTED)
-   - 40–55%: expected marginal flags — review the `short_evidence` text
+   - 70%+ and FLAGGED: potential detection bug (should have been DETECTED) → note as false negative candidate
+   - 50–69%: expected in quick mode; check `short_evidence` to decide real vs. noise
+   - 40–49%: expected in deep mode (lower threshold); marginal — review `event_type` and sender
    - Below 40%: should not appear (threshold gate); if present, report as blocking bug
-3. **Check `event_type` distribution:** if many rows say `unknown_payment` from the same sender, that sender is a Tier 1 candidate
+3. **Check `event_type` distribution:** if many rows say `unknown_payment` from the same sender, that sender is a Tier 1 expansion candidate (backlog)
 4. **Spot-check `short_evidence`:** does the detection reason make sense for the email?
-5. **Note any known services** appearing as FLAGGED instead of DETECTED — these need confidence calibration
+5. **Note any known services** appearing as FLAGGED instead of DETECTED — these need confidence calibration (backlog)
+
+**Per-mode guidance:**
+
+*Quick mode (threshold 0.50):*
+- Review Queue rows are higher-signal; fewer false positives expected
+- `unknown_payment` + no recognizable service → likely false positive
+- Known service name in `short_evidence` with amount → confidence floor issue → backlog
+
+*Deep mode (threshold 0.40):*
+- More rows expected vs. quick; 40–49% scores are "marginal detections" — treat as Review Queue inbox
+- Prioritize: known service + correct amount + right event_type → should be DETECTED (confidence calibration backlog)
+- Deprioritize: vague subjects, no amount, unknown sender → likely noise
+
+**Rule of thumb:** If you recognize the service and the amount matches your records, the row belongs in DETECTED. If it's stuck in Review Queue, add it to the False Negative Log as a confidence calibration candidate.
 
 ---
 

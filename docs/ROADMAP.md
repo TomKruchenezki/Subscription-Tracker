@@ -91,6 +91,51 @@ The detection and display layer should not change — only the data source chang
 
 ---
 
+## Phase 2.x Feature Backlog (Deferred — Not Scheduled)
+
+These features have been requested during Phase 2 validation and are deferred
+until the current Gmail scan pipeline is validated as stable. None of these
+should be implemented before the Phase 2.3 validation scans complete.
+
+**Gate:** All Phase 2.x backlog items are blocked until Phase 2.3 validation
+completes (all four scan ranges run successfully, validation doc filled in,
+no blocking bugs open).
+
+### Scan Range Extensions
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| **All Time scan** | Scan entire Gmail history with no date ceiling. Requires pagination limit removal and a progress indicator; forensic mode only. | Medium |
+| **Custom date range** | Explicit `date_from` + `date_to` date picker in the UI. API already accepts these params; UI work only. | Small |
+| **Scan since a specific date** | e.g. "scan since Jan 1, 2024" — same as custom date range, UI-only. | Small |
+| **Additional range presets** | 2.5y, 3y, and other values between current options. Trivial backend addition. | Trivial |
+
+### Content Access Levels (User-Selectable)
+
+Currently the app reads metadata only (sender, subject, date — no body, no snippet).
+Future modes proposed — each requires explicit privacy review before implementation:
+
+| Level | Description | Privacy notes |
+|-------|-------------|---------------|
+| **Metadata only** | Current default. No change needed. | ✅ Implemented |
+| **Metadata + snippet** | Include Gmail snippet field (~100 chars of body preview). `gmail.readonly` already permits this; no scope change. | ⚠ Requires consent UI and privacy-security-reviewer approval. Snippet is derived from body text. |
+| **Body text in memory** | Read body for detection, discard without storing. | ⚠ Major escalation. Non-negotiable Rule 2 ("Never fetch or store email bodies") would need explicit product-architect + privacy-security-reviewer review. |
+| **Attachments** | Not in scope at any planned phase. | ❌ Out of scope |
+
+### Detection Quality Improvements
+
+These are data-driven improvements to be tackled once real Gmail scan results
+are validated. Each requires the specialist agent and updated mock fixtures.
+
+| Item | Owner | Trigger |
+|------|-------|---------|
+| Hebrew + English subject line detection | `email-parser-specialist` | False negatives observed in Hebrew-language receipts |
+| Tier 1 provider list expansion | `subscription-detection-specialist` | False negatives logged during Phase 2.3 validation |
+| Parser improvements for specific receipt formats | `email-parser-specialist` | Amount extraction failures logged in validation |
+| Confidence scoring calibration | `subscription-detection-specialist` | Known services stuck in Review Queue at 40–60% |
+
+---
+
 ## Phase 3: Polish and Reliability
 
 **Goal:** Make the app reliable and pleasant to use. Add quality-of-life features
