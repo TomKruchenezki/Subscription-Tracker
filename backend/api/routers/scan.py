@@ -123,6 +123,8 @@ def run_scan(
 @router.get("/api/summary", response_model=Summary)
 def get_spending_summary():
     ensure_db()
+    use_mock = os.getenv("USE_MOCK", "true").lower() not in {"false", "0", "no"}
+    source_provider = None if use_mock else "GMAIL"
     with get_conn() as conn:
-        data = get_summary(conn)
+        data = get_summary(conn, source_provider=source_provider)
     return Summary(**data)

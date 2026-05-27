@@ -56,3 +56,4 @@ class Summary(BaseModel):
     active_count: int
     detected_count: int
     flagged_count: int
+    has_mock_data: bool = False   # True only when USE_MOCK=false and MOCK rows exist in DB

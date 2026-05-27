@@ -4,7 +4,7 @@ import pytest
 from backend.db.setup import (
     get_connection, upsert_subscription, insert_email_record,
     get_subscriptions, get_subscription_by_id, get_email_records,
-    update_subscription_lifecycle, init_db, create_scan_job,
+    update_subscription_lifecycle, get_summary, init_db, create_scan_job,
 )
 
 
@@ -408,3 +408,143 @@ def test_create_scan_job_after_init_db(tmp_path):
         assert row is not None, "create_scan_job must persist the new row to scan_jobs"
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.6: source_provider filtering in DB layer
+# ---------------------------------------------------------------------------
+
+def _insert_sub_and_record(
+    conn,
+    source_provider: str,
+    name: str,
+    amount: float,
+    disposition: str = "DETECTED",
+    subject_suffix: str = "",
+) -> str:
+    """Helper: insert one subscription + one email_record with the given source_provider."""
+    sub_id, _ = upsert_subscription(
+        conn, name=name, amount=amount, currency="USD",
+        billing_cycle="MONTHLY", category="SAAS", status="ACTIVE",
+        source_provider=source_provider,
+    )
+    conn.commit()
+    insert_email_record(
+        conn,
+        source_message_id=f"msg-{name}-{source_provider}{subject_suffix}",
+        source_provider=source_provider,
+        source_account_id=f"acct_{source_provider.lower()}",
+        source_account_email=f"test@{source_provider.lower()}.local",
+        subscription_id=sub_id,
+        sender_address=f"billing@{name.lower()}.com",
+        sender_name=name,
+        subject=f"{name} receipt",
+        email_date="2026-01-01T00:00:00Z",
+        amount_extracted=amount,
+        currency_extracted="USD",
+        confidence_score=0.9,
+        disposition=disposition,
+    )
+    conn.commit()
+    return sub_id
+
+
+def test_get_subscriptions_source_provider_gmail(conn):
+    """get_subscriptions(source_provider='GMAIL') returns only GMAIL rows."""
+    _insert_sub_and_record(conn, "MOCK", "MockSvc", 5.00)
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc", 10.00)
+
+    gmail_subs = get_subscriptions(conn, source_provider="GMAIL")
+    assert len(gmail_subs) == 1, f"Expected 1 GMAIL subscription, got {len(gmail_subs)}"
+    assert gmail_subs[0]["source_provider"] == "GMAIL"
+    assert gmail_subs[0]["name"] == "GmailSvc"
+
+
+def test_get_subscriptions_source_provider_mock(conn):
+    """get_subscriptions(source_provider='MOCK') returns only MOCK rows."""
+    _insert_sub_and_record(conn, "MOCK", "MockSvc2", 5.00)
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc2", 10.00)
+
+    mock_subs = get_subscriptions(conn, source_provider="MOCK")
+    assert len(mock_subs) == 1, f"Expected 1 MOCK subscription, got {len(mock_subs)}"
+    assert mock_subs[0]["source_provider"] == "MOCK"
+
+
+def test_get_subscriptions_no_filter_returns_all(conn):
+    """get_subscriptions() with no source_provider returns both MOCK and GMAIL rows."""
+    _insert_sub_and_record(conn, "MOCK", "MockSvc3", 5.00)
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc3", 10.00)
+
+    all_subs = get_subscriptions(conn)
+    names = {s["name"] for s in all_subs}
+    assert "MockSvc3" in names
+    assert "GmailSvc3" in names
+
+
+def test_get_email_records_source_provider_filter(conn):
+    """get_email_records(source_provider='GMAIL') returns only GMAIL email_records."""
+    _insert_sub_and_record(conn, "MOCK", "MockSvc4", 5.00)
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc4", 10.00)
+
+    gmail_records = get_email_records(conn, source_provider="GMAIL")
+    assert len(gmail_records) == 1, f"Expected 1 GMAIL record, got {len(gmail_records)}"
+    assert gmail_records[0]["source_provider"] == "GMAIL"
+
+    all_records = get_email_records(conn)
+    assert len(all_records) == 2, "No filter must return both MOCK and GMAIL records"
+
+
+def test_get_summary_source_provider_gmail_excludes_mock(conn):
+    """get_summary(source_provider='GMAIL') counts only GMAIL subscriptions/records.
+
+    Create 1 MOCK ACTIVE sub ($10) and 1 GMAIL ACTIVE sub ($20).
+    Gmail-filtered summary must show: active_count=1, total_monthly=$20.
+    Unfiltered summary must show: active_count=2, total_monthly=$30.
+    """
+    _insert_sub_and_record(conn, "MOCK", "MockSvc5", 10.00)
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc5", 20.00)
+
+    gmail_summary = get_summary(conn, source_provider="GMAIL")
+    assert gmail_summary["active_count"] == 1, (
+        f"Gmail summary should have 1 active sub, got {gmail_summary['active_count']}"
+    )
+    assert gmail_summary["total_monthly_cost"] == pytest.approx(20.00), (
+        f"Gmail summary should cost $20, got {gmail_summary['total_monthly_cost']}"
+    )
+
+    unfiltered = get_summary(conn)
+    assert unfiltered["active_count"] == 2, (
+        f"Unfiltered summary should have 2 active subs, got {unfiltered['active_count']}"
+    )
+    assert unfiltered["total_monthly_cost"] == pytest.approx(30.00), (
+        f"Unfiltered summary should cost $30, got {unfiltered['total_monthly_cost']}"
+    )
+
+
+def test_get_summary_has_mock_data_flag(conn):
+    """get_summary(source_provider='GMAIL') sets has_mock_data=True when MOCK rows exist."""
+    # Insert both MOCK and GMAIL rows
+    _insert_sub_and_record(conn, "MOCK", "MockSvc6", 5.00, subject_suffix="-a")
+    _insert_sub_and_record(conn, "GMAIL", "GmailSvc6", 15.00, subject_suffix="-b")
+
+    summary_with_mock = get_summary(conn, source_provider="GMAIL")
+    assert summary_with_mock["has_mock_data"] is True, (
+        "has_mock_data must be True when MOCK rows exist in DB during Gmail mode"
+    )
+
+    # Remove MOCK rows and verify flag clears
+    conn.execute("DELETE FROM email_records WHERE source_provider = 'MOCK'")
+    conn.execute("DELETE FROM subscriptions WHERE source_provider = 'MOCK'")
+    conn.commit()
+
+    summary_clean = get_summary(conn, source_provider="GMAIL")
+    assert summary_clean["has_mock_data"] is False, (
+        "has_mock_data must be False after all MOCK rows are removed"
+    )
+
+    # Unfiltered summary (mock mode) should never report has_mock_data=True
+    _insert_sub_and_record(conn, "MOCK", "MockSvc7", 5.00, subject_suffix="-c")
+    summary_mock_mode = get_summary(conn, source_provider=None)
+    assert summary_mock_mode["has_mock_data"] is False, (
+        "has_mock_data must always be False when source_provider is None (mock mode)"
+    )

@@ -123,10 +123,11 @@ export default function DashboardPage() {
     }
   };
 
-  // Detect mixed MOCK + GMAIL data
-  const hasMock = subscriptions.some((s) => s.source_provider === "MOCK");
-  const hasGmail = subscriptions.some((s) => s.source_provider === "GMAIL");
-  const mixedSources = hasMock && hasGmail;
+  // Gmail mode: endpoints auto-filter to GMAIL rows; has_mock_data=true means MOCK rows exist
+  // but are hidden (not mixed). Mock mode: show warning if GMAIL rows are present.
+  const isGmailMode = mode === "GMAIL";
+  const hasMockRows = isGmailMode && (summary?.has_mock_data ?? false);
+  const hasMockInMockMode = !isGmailMode && subscriptions.some((s) => s.source_provider === "GMAIL");
 
   return (
     <>
@@ -141,9 +142,16 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {mixedSources && (
+      {hasMockRows && (
         <div style={{ background: "#422006", border: "1px solid var(--yellow)", borderRadius: "8px", padding: "12px 16px", marginBottom: "16px", color: "var(--yellow)", fontSize: "14px" }}>
-          Showing mixed <strong>MOCK</strong> + <strong>GMAIL</strong> data. Run a scan in Gmail mode to replace mock rows, or restart with <code>USE_MOCK=false</code> and clear the database.
+          MOCK rows exist in the local DB but are <strong>excluded</strong> from Gmail mode results.
+          Run <code>python scripts/cleanup_mock_rows.py</code> to remove them permanently.
+        </div>
+      )}
+
+      {hasMockInMockMode && (
+        <div style={{ background: "#422006", border: "1px solid var(--yellow)", borderRadius: "8px", padding: "12px 16px", marginBottom: "16px", color: "var(--yellow)", fontSize: "14px" }}>
+          GMAIL rows exist in the DB but you are in <strong>MOCK mode</strong> (<code>USE_MOCK=true</code>). Set <code>USE_MOCK=false</code> to see Gmail data.
         </div>
       )}
 

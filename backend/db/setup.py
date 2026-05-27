@@ -157,12 +157,23 @@ def update_subscription_lifecycle(
     )
 
 
-def get_subscriptions(conn: sqlite3.Connection, status: str | None = None) -> list[sqlite3.Row]:
+def get_subscriptions(
+    conn: sqlite3.Connection,
+    status: str | None = None,
+    source_provider: str | None = None,
+) -> list[sqlite3.Row]:
+    conditions = []
+    params: list = []
     if status:
-        return conn.execute(
-            "SELECT * FROM subscriptions WHERE status = ? ORDER BY name", (status,)
-        ).fetchall()
-    return conn.execute("SELECT * FROM subscriptions ORDER BY name").fetchall()
+        conditions.append("status = ?")
+        params.append(status)
+    if source_provider:
+        conditions.append("source_provider = ?")
+        params.append(source_provider)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    return conn.execute(
+        f"SELECT * FROM subscriptions {where} ORDER BY name", params
+    ).fetchall()
 
 
 def get_subscription_by_id(conn: sqlite3.Connection, subscription_id: str) -> sqlite3.Row | None:
@@ -210,8 +221,12 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
     return record_id
 
 
-def get_email_records(conn: sqlite3.Connection, disposition: str | None = None,
-                       account_id: str | None = None) -> list[sqlite3.Row]:
+def get_email_records(
+    conn: sqlite3.Connection,
+    disposition: str | None = None,
+    account_id: str | None = None,
+    source_provider: str | None = None,
+) -> list[sqlite3.Row]:
     conditions = []
     params: list = []
     if disposition:
@@ -220,6 +235,9 @@ def get_email_records(conn: sqlite3.Connection, disposition: str | None = None,
     if account_id:
         conditions.append("source_account_id = ?")
         params.append(account_id)
+    if source_provider:
+        conditions.append("source_provider = ?")
+        params.append(source_provider)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
         f"SELECT * FROM email_records {where} ORDER BY email_date DESC", params
@@ -235,19 +253,41 @@ def get_records_for_subscription(conn: sqlite3.Connection, subscription_id: str)
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
-def get_summary(conn: sqlite3.Connection) -> dict:
+def get_summary(conn: sqlite3.Connection, source_provider: str | None = None) -> dict:
+    """Return dashboard summary counts, optionally filtered by source_provider.
+
+    When source_provider='GMAIL', also sets has_mock_data=True if any MOCK rows
+    still exist in the database (they are excluded from counts but present in DB).
+    """
+    sp_clause = " AND source_provider = ?" if source_provider else ""
+    sp_params: list = [source_provider] if source_provider else []
+
     active = conn.execute(
         "SELECT COUNT(*) as cnt, SUM(CASE WHEN billing_cycle='ANNUAL' THEN amount/12.0 ELSE amount END) as monthly "
-        "FROM subscriptions WHERE status = 'ACTIVE' AND amount IS NOT NULL"
+        f"FROM subscriptions WHERE status = 'ACTIVE' AND amount IS NOT NULL{sp_clause}",
+        sp_params,
     ).fetchone()
 
     flagged_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM email_records WHERE disposition = 'FLAGGED'"
+        f"SELECT COUNT(*) as cnt FROM email_records WHERE disposition = 'FLAGGED'{sp_clause}",
+        sp_params,
     ).fetchone()["cnt"]
 
     detected_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM email_records WHERE disposition = 'DETECTED'"
+        f"SELECT COUNT(*) as cnt FROM email_records WHERE disposition = 'DETECTED'{sp_clause}",
+        sp_params,
     ).fetchone()["cnt"]
+
+    # When in Gmail mode, also report whether any MOCK rows still exist in the DB
+    # (they are excluded from the counts above but the user may want to clean them up)
+    has_mock_data = False
+    if source_provider == "GMAIL":
+        has_mock_data = bool(
+            conn.execute(
+                "SELECT 1 FROM subscriptions WHERE source_provider = 'MOCK' "
+                "UNION SELECT 1 FROM email_records WHERE source_provider = 'MOCK' LIMIT 1"
+            ).fetchone()
+        )
 
     return {
         "total_monthly_cost": round(active["monthly"] or 0.0, 2),
@@ -255,6 +295,7 @@ def get_summary(conn: sqlite3.Connection) -> dict:
         "active_count": active["cnt"],
         "detected_count": detected_count,
         "flagged_count": flagged_count,
+        "has_mock_data": has_mock_data,
     }
 
 

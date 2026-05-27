@@ -257,3 +257,91 @@ def test_scan_mock_mode_skips_gmail_account_lookup(client):
         resp = client.post("/api/scan")
     assert resp.status_code == 200
     mock_lookup.assert_not_called()
+
+
+# ── Phase 2.6: source_provider filtering in endpoints ─────────────────────────
+
+def _seed_mock_and_gmail_rows(db_path: str) -> None:
+    """Insert one MOCK and one GMAIL subscription + email_record into the test DB."""
+    import sqlite3, uuid
+    conn = sqlite3.connect(db_path)
+    now = "2026-01-01T00:00:00Z"
+
+    for provider, name, amount in [("MOCK", "MockSvc", 5.00), ("GMAIL", "GmailSvc", 20.00)]:
+        sub_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO subscriptions
+               (subscription_id, name, service_url, amount, currency, billing_cycle,
+                next_renewal, category, status, first_seen, last_seen,
+                source_provider, created_at, updated_at)
+               VALUES (?,?,NULL,?,?,?,NULL,?,?,?,?,?,?,?)""",
+            (sub_id, name, amount, "USD", "MONTHLY", "SAAS", "ACTIVE",
+             now, now, provider, now, now),
+        )
+        record_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO email_records
+               (record_id, subscription_id, source_message_id, source_provider,
+                source_account_id, source_account_email, sender_address,
+                sender_name, subject, email_date, amount_extracted,
+                currency_extracted, confidence_score, disposition, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (record_id, sub_id, f"msg-{provider}-001", provider,
+             f"acct_{provider}", f"test@{provider.lower()}.local",
+             f"billing@{name.lower()}.com", name, f"{name} receipt",
+             now, amount, "USD", 0.9, "DETECTED", now),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_summary_gmail_mode_excludes_mock_rows(db_path, gmail_client):
+    """GET /api/summary in Gmail mode returns active_count=1 (only GMAIL sub)."""
+    _seed_mock_and_gmail_rows(db_path)
+    with patch("backend.api.routers.scan.get_active_gmail_account",
+               return_value={"account_id": "u@g.com", "is_active": 1}):
+        resp = gmail_client.get("/api/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["active_count"] == 1, (
+        f"Gmail mode summary should count 1 GMAIL sub, got {data['active_count']}"
+    )
+    assert data["total_monthly_cost"] == pytest.approx(20.00), (
+        f"Gmail mode should sum only GMAIL sub ($20), got {data['total_monthly_cost']}"
+    )
+    assert data["has_mock_data"] is True, "has_mock_data must be True when MOCK rows exist"
+
+
+def test_subscriptions_gmail_mode_excludes_mock_rows(db_path, gmail_client):
+    """GET /api/subscriptions in Gmail mode returns only the GMAIL subscription."""
+    _seed_mock_and_gmail_rows(db_path)
+    resp = gmail_client.get("/api/subscriptions")
+    assert resp.status_code == 200
+    subs = resp.json()
+    assert len(subs) == 1, f"Gmail mode should return 1 subscription (GMAIL only), got {len(subs)}"
+    assert subs[0]["source_provider"] == "GMAIL"
+    assert subs[0]["name"] == "GmailSvc"
+
+
+def test_email_records_gmail_mode_excludes_mock_rows(db_path, gmail_client):
+    """GET /api/email-records in Gmail mode returns only GMAIL email_records."""
+    _seed_mock_and_gmail_rows(db_path)
+    resp = gmail_client.get("/api/email-records")
+    assert resp.status_code == 200
+    records = resp.json()
+    assert len(records) == 1, (
+        f"Gmail mode should return 1 email_record (GMAIL only), got {len(records)}"
+    )
+    assert records[0]["source_provider"] == "GMAIL"
+
+
+def test_mock_mode_shows_all_sources(db_path, client):
+    """GET /api/subscriptions in MOCK mode (USE_MOCK=true) returns both MOCK and GMAIL rows."""
+    _seed_mock_and_gmail_rows(db_path)
+    resp = client.get("/api/subscriptions")
+    assert resp.status_code == 200
+    subs = resp.json()
+    providers = {s["source_provider"] for s in subs}
+    assert "MOCK" in providers, "Mock mode must show MOCK subscriptions"
+    assert "GMAIL" in providers, "Mock mode must also show GMAIL subscriptions"
+    assert len(subs) == 2, f"Mock mode should return both subs (2 total), got {len(subs)}"

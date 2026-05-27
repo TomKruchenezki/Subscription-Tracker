@@ -75,6 +75,7 @@ export interface Summary {
   active_count: number;
   detected_count: number;
   flagged_count: number;
+  has_mock_data?: boolean;  // present in Gmail mode; true when MOCK rows exist but are excluded
 }
 
 export interface ScanJobStatus {

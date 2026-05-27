@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, HTTPException, Query
 from backend.api.routers._db import get_conn
 from backend.db.setup import get_subscriptions, get_subscription_by_id, get_email_records, get_records_for_subscription
@@ -5,6 +6,17 @@ from backend.models.subscription import SubscriptionResponse, EmailRecordRespons
 from datetime import datetime
 
 router = APIRouter()
+
+
+def _source_provider_filter() -> str | None:
+    """Return 'GMAIL' when running in Gmail mode, None in mock mode.
+
+    In Gmail mode (USE_MOCK=false), endpoints should only return GMAIL rows so
+    that leftover MOCK rows from earlier test scans don't inflate counts or
+    pollute the Review Queue.
+    """
+    use_mock = os.getenv("USE_MOCK", "true").lower() not in {"false", "0", "no"}
+    return None if use_mock else "GMAIL"
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -62,7 +74,8 @@ def _row_to_record(row) -> dict:
 @router.get("/api/subscriptions", response_model=list[SubscriptionResponse])
 def list_subscriptions(status: str | None = Query(None)):
     with get_conn() as conn:
-        rows = get_subscriptions(conn, status=status)
+        rows = get_subscriptions(conn, status=status,
+                                 source_provider=_source_provider_filter())
     return [SubscriptionResponse(**_row_to_subscription(r)) for r in rows]
 
 
@@ -83,5 +96,6 @@ def get_subscription(subscription_id: str):
 @router.get("/api/email-records", response_model=list[EmailRecordResponse])
 def list_email_records(disposition: str | None = Query(None)):
     with get_conn() as conn:
-        rows = get_email_records(conn, disposition=disposition)
+        rows = get_email_records(conn, disposition=disposition,
+                                 source_provider=_source_provider_filter())
     return [EmailRecordResponse(**_row_to_record(r)) for r in rows]
