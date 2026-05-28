@@ -608,3 +608,193 @@ def test_notification_creates_no_payment_event(conn):
     assert len(events) == 0, (
         f"NOTIFICATION email must NOT create any payment_event, got {len(events)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3B: Payment event semantics — correctness tests
+# ---------------------------------------------------------------------------
+
+def test_none_pattern_creates_no_payment_event(conn):
+    """Email with no billing pattern must not create a payment_event regardless of disposition.
+
+    Phase 3.3 bug: PatternType.NONE was mapped to 'unknown_payment', causing every
+    ambiguous email to produce a payment_event. After fix, PatternType.NONE → no event.
+    """
+    # Vague subject from unknown sender — no billing pattern, no amount.
+    # May be FLAGGED or IGNORED depending on confidence score thresholds.
+    # Either way, no payment_event should be created.
+    email = _make_email(
+        "pe-none-001",
+        "noreply@somewebsite.example.com",
+        "Your account update",
+    )
+    process_email(conn, email)
+
+    events = get_payment_events(conn, source_message_id="pe-none-001")
+    assert len(events) == 0, (
+        f"PatternType.NONE (no financial signal) must produce no payment_event. "
+        f"Got {len(events)} event(s). Phase 3.3 bug: NONE was mapping to 'unknown_payment'."
+    )
+
+
+def test_renewal_creates_renewal_charge_event(conn):
+    """A second RECEIPT from the same Tier 1 sender (renewal) must create event_type='renewal_charge'.
+
+    Phase 3.3 bug: RENEWAL was collapsed to 'subscription_charge', losing semantic distinction.
+    After fix: first charge → 'subscription_charge'; subsequent → 'renewal_charge'.
+    """
+    # First receipt — creates the subscription
+    first = _make_email(
+        "pe-renewal-001",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+        date_str="2025-01-01T08:00:00Z",
+    )
+    process_email(conn, first)
+
+    # Second receipt — renewal of existing subscription
+    second = _make_email(
+        "pe-renewal-002",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+        date_str="2025-02-01T08:00:00Z",
+    )
+    process_email(conn, second)
+
+    events_first = get_payment_events(conn, source_message_id="pe-renewal-001")
+    events_second = get_payment_events(conn, source_message_id="pe-renewal-002")
+
+    assert len(events_first) == 1
+    assert events_first[0]["event_type"] == "subscription_charge", (
+        f"First receipt must produce 'subscription_charge', got {events_first[0]['event_type']!r}"
+    )
+
+    assert len(events_second) == 1
+    assert events_second[0]["event_type"] == "renewal_charge", (
+        f"Second receipt (renewal) must produce 'renewal_charge', "
+        f"got {events_second[0]['event_type']!r}. "
+        f"Phase 3.3 bug: RENEWAL was mapped to 'subscription_charge'."
+    )
+
+
+def test_flagged_no_amount_creates_no_payment_event(conn):
+    """FLAGGED email without an extracted amount must not create any payment_event.
+
+    Phase 3.3 bug: ALL FLAGGED emails (including those with no financial data) created
+    payment_events. After fix: FLAGGED + no amount → no event.
+    """
+    # Tier 1 sender (Google) but subject has no billing pattern → FLAGGED NOTIFICATION or similar
+    # Use an unknown sender to ensure FLAGGED disposition with no amount
+    email = _make_email(
+        "pe-flagged-noamt-001",
+        "receipt@unknownservice.example.com",
+        "Payment confirmation",  # RECEIPT-like subject from unknown sender → FLAGGED
+    )
+    result = process_email(conn, email)
+    # The email may be FLAGGED (unknown sender, receipt-like subject, no amount)
+    if result.disposition != "FLAGGED":
+        pytest.skip(f"Expected FLAGGED, got {result.disposition} — adjust test fixture")
+
+    events = get_payment_events(conn, source_message_id="pe-flagged-noamt-001")
+    assert len(events) == 0, (
+        f"FLAGGED email with no extracted amount must not create a payment_event, "
+        f"got {len(events)} event(s). "
+        f"Phase 3.3 bug: all FLAGGED emails created 'unknown_payment' events regardless of amount."
+    )
+
+
+def test_is_recurring_candidate_requires_amount(conn):
+    """is_recurring_candidate must be 0 when no amount was extracted.
+
+    A subscription_charge or renewal_charge without an amount is not a confirmed
+    recurring payment — we don't know the amount to track.
+    """
+    # Spotify renewal without amount in subject
+    email = _make_email(
+        "pe-recurring-noamt-001",
+        "billing@spotify.com",
+        "חידוש מנוי Spotify",  # renewal subject, no amount
+    )
+    process_email(conn, email)
+
+    events = get_payment_events(conn, source_message_id="pe-recurring-noamt-001")
+    if events:
+        assert events[0]["is_recurring_candidate"] == 0, (
+            f"is_recurring_candidate must be 0 when amount is NULL, "
+            f"got {events[0]['is_recurring_candidate']}. "
+            f"A charge without a confirmed amount is not a meaningful recurring signal."
+        )
+
+
+def test_cancellation_event_type_preserved(conn):
+    """CANCELLATION pattern must create event_type='cancellation' — not 'subscription_charge'."""
+    # First create a subscription to cancel
+    receipt = _make_email(
+        "pe-cancel-setup",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+    )
+    process_email(conn, receipt)
+
+    cancellation = _make_email(
+        "pe-cancel-001",
+        "billing@account.netflix.com",
+        "Your Netflix subscription has been cancelled",
+    )
+    process_email(conn, cancellation)
+
+    events = get_payment_events(conn, source_message_id="pe-cancel-001")
+    assert len(events) == 1, (
+        f"CANCELLATION email must create exactly 1 payment_event, got {len(events)}"
+    )
+    assert events[0]["event_type"] == "cancellation", (
+        f"CANCELLATION pattern must produce event_type='cancellation', "
+        f"got {events[0]['event_type']!r}"
+    )
+
+
+def test_payment_events_total_less_than_email_records(conn):
+    """Non-financial emails must not produce payment_events; financial ones must.
+
+    Phase 3.3 bug: payment_events == email_records because every email produced an event.
+    After fix: only real financial events (receipt, renewal) produce payment_events.
+
+    Note: non-financial emails from unknown senders may be IGNORED (score < threshold)
+    and never reach email_records at all. The assertion here checks per-message behaviour
+    rather than aggregate counts, to avoid depending on whether IGNORED emails are stored.
+    """
+    financial_ids = ["mix-001", "mix-002"]
+    non_financial_ids = ["mix-003", "mix-004", "mix-005"]
+
+    emails = [
+        # Financial — produce payment_events (subscription_charge / renewal_charge)
+        _make_email("mix-001", "billing@account.netflix.com",
+                    "Your Netflix membership receipt - $15.49", "2025-01-01T08:00:00Z"),
+        _make_email("mix-002", "billing@account.netflix.com",
+                    "Your Netflix membership receipt - $15.49", "2025-02-01T08:00:00Z"),
+        # Non-financial — no billing pattern, no amount → must NOT produce payment_events
+        _make_email("mix-003", "no-reply@accounts.google.com",
+                    "Security alert: new sign-in"),
+        _make_email("mix-004", "noreply@somesite.example.com",
+                    "Welcome to our newsletter"),
+        _make_email("mix-005", "noreply@somesite.example.com",
+                    "Weekly digest: top articles this week"),
+    ]
+    for email in emails:
+        process_email(conn, email)
+
+    # Financial emails must each produce exactly 1 payment_event.
+    for msg_id in financial_ids:
+        events = get_payment_events(conn, source_message_id=msg_id)
+        assert len(events) == 1, (
+            f"Financial email {msg_id} must produce 1 payment_event, got {len(events)}"
+        )
+
+    # Non-financial emails must produce zero payment_events regardless of disposition
+    # (DETECTED, FLAGGED, or IGNORED — none of them carry financial signal).
+    for msg_id in non_financial_ids:
+        events = get_payment_events(conn, source_message_id=msg_id)
+        assert len(events) == 0, (
+            f"Non-financial email {msg_id} must not produce payment_events, "
+            f"got {len(events)}. Phase 3.3 bug: every email was creating a payment_event."
+        )

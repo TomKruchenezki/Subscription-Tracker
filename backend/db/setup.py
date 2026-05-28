@@ -466,8 +466,16 @@ def get_payment_events(
     merchant_name: str | None = None,
     subscription_id: str | None = None,
     event_type: str | None = None,
+    source_provider: str | None = None,
+    is_recurring_candidate: int | None = None,
+    is_one_time_candidate: int | None = None,
+    limit: int = 500,
 ) -> list[sqlite3.Row]:
-    """Return payment events, optionally filtered by one or more fields."""
+    """Return payment events, optionally filtered. Safe fields only — no raw email content.
+
+    Privacy: payment_events table contains no subject, sender_address, snippet, body_text,
+    or body_html. merchant_name is the canonical name from sender_list.py (e.g. 'Spotify').
+    """
     conditions = []
     params: list = []
     if source_message_id is not None:
@@ -482,10 +490,19 @@ def get_payment_events(
     if event_type is not None:
         conditions.append("event_type = ?")
         params.append(event_type)
+    if source_provider is not None:
+        conditions.append("source_provider = ?")
+        params.append(source_provider)
+    if is_recurring_candidate is not None:
+        conditions.append("is_recurring_candidate = ?")
+        params.append(is_recurring_candidate)
+    if is_one_time_candidate is not None:
+        conditions.append("is_one_time_candidate = ?")
+        params.append(is_one_time_candidate)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
-        f"SELECT * FROM payment_events {where} ORDER BY event_date DESC",
-        params,
+        f"SELECT * FROM payment_events {where} ORDER BY event_date DESC LIMIT ?",
+        params + [limit],
     ).fetchall()
 
 

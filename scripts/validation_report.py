@@ -480,6 +480,104 @@ def report(db_path: str, use_mock: bool) -> None:
         else:
             print("  (no payment events recorded yet — run a scan first)")
 
+    # ── Payment Event Semantics Check (Phase 3.3B) ────────────────────────────
+    if has_payment_events and total_pe > 0:
+        print(_header("Payment Event Semantics"))
+
+        # Expected: payment_events << email_records (not a 1:1 mirror)
+        pe_ratio = total_pe / max(total_records, 1)
+        ratio_ok = pe_ratio < 0.6  # healthy: < 60% of email_records
+        flag_ratio = _flag(ratio_ok, warn=(0.6 <= pe_ratio <= 0.9))
+        print(f"  payment_events / email_records ratio:  {flag_ratio}  "
+              f"{total_pe} / {total_records} = {pe_ratio:.0%}"
+              f" {'(healthy)' if ratio_ok else '(WARNING: may be mirroring email_records)'}")
+
+        # renewal_charge events present (Phase 3.3B fix verification)
+        renewal_count = _run(conn,
+            "SELECT COUNT(*) FROM payment_events WHERE event_type = 'renewal_charge'"
+        )[0][0]
+        has_renewal = renewal_count > 0
+        if total_pe > 0:
+            flag_renewal = _flag(has_renewal, warn=not has_renewal)
+            print(f"  renewal_charge events:  {flag_renewal}  {renewal_count}")
+
+        # No unknown_payment events if total is reasonable
+        unknown_count = _run(conn,
+            "SELECT COUNT(*) FROM payment_events WHERE event_type = 'unknown_payment'"
+        )[0][0]
+        unknown_ratio = unknown_count / max(total_pe, 1)
+        flag_unknown = _flag(unknown_ratio < 0.1, warn=(0.1 <= unknown_ratio < 0.5))
+        print(f"  unknown_payment ratio:  {flag_unknown}  "
+              f"{unknown_count} / {total_pe} = {unknown_ratio:.0%}"
+              f"{' (WARNING: high unknown ratio — check PatternType.NONE gate)' if unknown_ratio >= 0.5 else ''}")
+
+        # Suspicious: ACTIVE subscriptions with ANNUAL cycle and no strong evidence
+        sus_annual = _run(conn,
+            """SELECT name, amount, currency, billing_cycle FROM subscriptions
+               WHERE status = 'ACTIVE' AND billing_cycle = 'ANNUAL'
+               AND source_provider != 'MOCK'
+               ORDER BY name""")
+        if sus_annual:
+            print(f"\n  Suspicious ANNUAL subscriptions ({len(sus_annual)} — verify these have strong cycle evidence):")
+            for row in sus_annual:
+                amt = f"{row['currency']}{row['amount']:.2f}" if row['amount'] else "N/A"
+                print(f"    {row['name']:<20}  {amt}  ANNUAL")
+
+        # Currency preservation: ACTIVE subscriptions with their stored currencies
+        print(f"\n  ACTIVE subscriptions by currency:")
+        active_by_currency = _run(conn,
+            """SELECT currency, COUNT(*) as cnt,
+                      GROUP_CONCAT(name, ', ') as names
+               FROM subscriptions
+               WHERE status = 'ACTIVE' AND source_provider != 'MOCK'
+               GROUP BY currency ORDER BY cnt DESC""")
+        if active_by_currency:
+            for row in active_by_currency:
+                print(f"    {row['currency'] or 'NULL':<6}  {row['cnt']:>2} sub(s): {row['names']}")
+        else:
+            print("    (no ACTIVE subscriptions)")
+
+    # ── UI Visibility Checklist (Phase 3.3B) ──────────────────────────────────
+    print(_header("UI Visibility Checklist"))
+
+    import os as _os
+    _project_root = Path(__file__).resolve().parent.parent
+
+    # Check 1: payment-events router exists
+    pe_router_path = _project_root / "backend" / "api" / "routers" / "payment_events.py"
+    _flag_pe_router = _flag(pe_router_path.exists())
+    print(f"  GET /api/payment-events endpoint:      {_flag_pe_router}  "
+          f"({'found' if pe_router_path.exists() else 'MISSING — create backend/api/routers/payment_events.py'})")
+
+    # Check 2: PaymentEventsTable component exists
+    pet_path = _project_root / "frontend" / "src" / "components" / "PaymentEventsTable.tsx"
+    _flag_pet = _flag(pet_path.exists())
+    print(f"  Frontend PaymentEventsTable component: {_flag_pet}  "
+          f"({'found' if pet_path.exists() else 'MISSING — create frontend/src/components/PaymentEventsTable.tsx'})")
+
+    # Check 3: format.ts helper exists (currency symbols)
+    fmt_path = _project_root / "frontend" / "src" / "lib" / "format.ts"
+    _flag_fmt = _flag(fmt_path.exists())
+    print(f"  Currency format helper (format.ts):    {_flag_fmt}  "
+          f"({'found' if fmt_path.exists() else 'MISSING — hardcoded $ symbols in use'})")
+
+    # Check 4: hardcoded "$" in SpendingSummary
+    summary_tsx = _project_root / "frontend" / "src" / "components" / "SpendingSummary.tsx"
+    hardcoded_dollar = False
+    if summary_tsx.exists():
+        content = summary_tsx.read_text(encoding="utf-8")
+        hardcoded_dollar = '`$${summary.total_monthly_cost' in content
+    _flag_dollar = _flag(not hardcoded_dollar)
+    print(f"  No hardcoded $ in SpendingSummary:     {_flag_dollar}  "
+          f"({'clean' if not hardcoded_dollar else 'WARN: hardcoded $ found — ILS will show as $'})")
+
+    # Check 5: payment_events/email_records ratio (computed above if table exists)
+    if has_payment_events and total_pe > 0:
+        ratio_ok_final = (total_pe / max(total_records, 1)) < 0.6
+        _flag_ratio_final = _flag(ratio_ok_final, warn=not ratio_ok_final)
+        print(f"  payment_events not mirroring emails:   {_flag_ratio_final}  "
+              f"{total_pe} events vs {total_records} records")
+
     # ── Duplicates ────────────────────────────────────────────────────────────
     print(_header("Duplicates"))
 

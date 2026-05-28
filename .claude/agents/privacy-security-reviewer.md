@@ -34,6 +34,31 @@ For every change you review, work through this list explicitly:
 - [ ] Logging does not emit token values, email body content, or user PII
 - [ ] No new dependencies that could exfiltrate data (analytics SDKs, monitoring clients)
 
+## Phase 3.x Regression Checklist
+
+For changes in Phase 3.1+ (payment_events, body_text ephemeral, provider parsers):
+
+- [ ] `payment_events` table contains no raw email content columns
+  (no `subject`, `sender_address`, `snippet`, `body_text`, `body_html`, `short_evidence`)
+- [ ] `body_text` on `EmailMetadata` is ephemeral — never passed to `insert_email_record()`
+  or `insert_payment_event()`
+- [ ] `format="full"` in `gmail.py` only appears inside `_fetch_body()` — verified by
+  `tests/privacy/test_no_body_fetch.py`
+- [ ] `scripts/validation_report.py` does not reference `body_text` in any query or output
+
+## Regression Detection
+
+When reviewing a change that touches existing code (not just new code), explicitly check:
+
+1. **Token storage path** — does the change add any code path that could write a token to a
+   non-encrypted location (plaintext file, log line, env var, API response)?
+2. **Scope creep** — does the change add any Gmail API call that is NOT `format="metadata"` or
+   the explicitly-approved `format="full"` inside `_fetch_body()`?
+3. **Schema leak** — does the change add any column to `payment_events` or any new table that
+   stores email content fields already prohibited (subject, sender_address, snippet, body_text)?
+4. **Logging regression** — does the change add any `logger.*()` call that could emit
+   `body_text`, `snippet`, or token content as a format argument?
+
 ## Output Format
 
 Every review must produce one of:

@@ -108,53 +108,67 @@ def detect_cycle(
     Standalone cycle words (monthly, weekly) require a billing context word
     (payment, subscription, renew, etc.) in the same text to fire.
     Positional constructions (/mo, per month, every week, /yr) are always strong.
-    """
-    texts = [subject]
-    if snippet:
-        texts.append(snippet)
-    if body_text:
-        texts.append(body_text)
 
-    for text in texts:
+    body_text restriction: weak patterns (standalone "annual", "weekly", etc.) are
+    NOT applied to body_text. Billing receipt bodies almost always contain billing
+    context words, so a weak pattern like "annual" + "subscription" in body_text
+    would misclassify a monthly Spotify charge that mentions "annual plan" incidentally.
+    Only strong positional patterns (/year, per month, etc.) fire from body_text.
+    """
+    # Build (is_body_text, text) pairs — track source by label, not by index.
+    # When snippet is None, body_text occupies index 1; index-based detection would
+    # treat it as a non-body source. Labelling avoids that off-by-one bug.
+    sources: list[tuple[bool, str]] = [(False, subject)]
+    if snippet:
+        sources.append((False, snippet))
+    if body_text:
+        sources.append((True, body_text))
+
+    for is_body_text, text in sources:
+
         # Compute billing context once per text (shared by all weak patterns below).
         has_billing = bool(_BILLING_CONTEXT_RE.search(text))
 
-        # QUARTERLY — strong patterns fire regardless of context
+        # QUARTERLY — strong patterns fire regardless of source
         for pattern in _QUARTERLY_STRONG:
             if pattern.search(text):
                 return "QUARTERLY"
-        # QUARTERLY — weak patterns require billing context
-        for pattern in _QUARTERLY_WEAK:
-            if pattern.search(text) and has_billing:
-                return "QUARTERLY"
+        # QUARTERLY — weak patterns: subject/snippet only
+        if not is_body_text:
+            for pattern in _QUARTERLY_WEAK:
+                if pattern.search(text) and has_billing:
+                    return "QUARTERLY"
 
-        # ANNUAL — strong patterns fire regardless of context
+        # ANNUAL — strong patterns fire regardless of source
         for pattern in _ANNUAL_STRONG:
             if pattern.search(text):
                 return "ANNUAL"
-        # ANNUAL — weak patterns require billing context
-        # Prevents "annual savings" or "annual plan comparison" in body_text from
-        # misclassifying a monthly charge (e.g. Spotify ₪12.90/month).
-        for pattern in _ANNUAL_WEAK:
-            if pattern.search(text) and has_billing:
-                return "ANNUAL"
+        # ANNUAL — weak patterns: subject/snippet only
+        # body_text exclusion prevents "annual savings" or "Save with Annual plan" in a
+        # monthly billing email body from misclassifying the cycle.
+        if not is_body_text:
+            for pattern in _ANNUAL_WEAK:
+                if pattern.search(text) and has_billing:
+                    return "ANNUAL"
 
-        # MONTHLY — strong patterns first (always fire)
+        # MONTHLY — strong patterns fire regardless of source
         for pattern in _MONTHLY_STRONG:
             if pattern.search(text):
                 return "MONTHLY"
-        # MONTHLY — weak pattern: requires billing context
-        for pattern in _MONTHLY_WEAK:
-            if pattern.search(text) and has_billing:
-                return "MONTHLY"
+        # MONTHLY — weak patterns: subject/snippet only
+        if not is_body_text:
+            for pattern in _MONTHLY_WEAK:
+                if pattern.search(text) and has_billing:
+                    return "MONTHLY"
 
-        # WEEKLY — strong patterns first (always fire)
+        # WEEKLY — strong patterns fire regardless of source
         for pattern in _WEEKLY_STRONG:
             if pattern.search(text):
                 return "WEEKLY"
-        # WEEKLY — weak pattern: requires billing context
-        for pattern in _WEEKLY_WEAK:
-            if pattern.search(text) and has_billing:
-                return "WEEKLY"
+        # WEEKLY — weak patterns: subject/snippet only
+        if not is_body_text:
+            for pattern in _WEEKLY_WEAK:
+                if pattern.search(text) and has_billing:
+                    return "WEEKLY"
 
     return "UNKNOWN"

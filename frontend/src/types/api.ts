@@ -79,6 +79,22 @@ export interface Summary {
   monthly_costs_by_currency?: Record<string, number>;  // Phase 3.3: per-currency monthly totals
 }
 
+export interface PaymentEvent {
+  event_id: string;
+  event_type: string;
+  merchant_name: string;
+  amount: number | null;
+  currency: string | null;
+  event_date: string;
+  is_recurring_candidate: 0 | 1;
+  is_one_time_candidate: 0 | 1;
+  subscription_id: string | null;
+  confidence_score: number;
+  source_provider: string;
+  source_message_id: string;
+  created_at: string;
+}
+
 export interface ScanJobStatus {
   scan_id: string;
   mode: string;

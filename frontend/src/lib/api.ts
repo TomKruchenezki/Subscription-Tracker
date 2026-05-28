@@ -1,4 +1,4 @@
-import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus } from "@/types/api";
+import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus, PaymentEvent } from "@/types/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -50,4 +50,19 @@ export const api = {
   },
   scanStatus: (scanId: string) =>
     apiFetch<ScanJobStatus>(`/api/scan/status/${encodeURIComponent(scanId)}`),
+
+  paymentEvents: (params?: {
+    event_type?: string;
+    is_recurring_candidate?: number;
+    is_one_time_candidate?: number;
+    limit?: number;
+  }) => {
+    const p = new URLSearchParams();
+    if (params?.event_type) p.set("event_type", params.event_type);
+    if (params?.is_recurring_candidate != null) p.set("is_recurring_candidate", String(params.is_recurring_candidate));
+    if (params?.is_one_time_candidate != null) p.set("is_one_time_candidate", String(params.is_one_time_candidate));
+    if (params?.limit != null) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return apiFetch<PaymentEvent[]>(`/api/payment-events${qs ? `?${qs}` : ""}`);
+  },
 };

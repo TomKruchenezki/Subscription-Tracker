@@ -724,3 +724,113 @@ def test_upsert_subscription_currency_coalesce(conn):
         f"currency must remain 'ILS' after upsert with currency=None, "
         f"got {row['currency']!r}. COALESCE(?, currency) fix must be applied."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3B: get_payment_events filter tests + new event type tests
+# ---------------------------------------------------------------------------
+
+def test_get_payment_events_filters_by_event_type(conn):
+    """get_payment_events(event_type=...) returns only matching events."""
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-filter-001", source_message_id="msg-filter-001",
+        event_type="subscription_charge",
+    ))
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-filter-002", source_message_id="msg-filter-002",
+        event_type="renewal_charge",
+    ))
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-filter-003", source_message_id="msg-filter-003",
+        event_type="refund",
+    ))
+    conn.commit()
+
+    renewals = get_payment_events(conn, event_type="renewal_charge")
+    assert len(renewals) == 1, f"Filter by event_type='renewal_charge' must return 1 row, got {len(renewals)}"
+    assert renewals[0]["event_type"] == "renewal_charge"
+
+    refunds = get_payment_events(conn, event_type="refund")
+    assert len(refunds) == 1, f"Filter by event_type='refund' must return 1 row, got {len(refunds)}"
+
+
+def test_get_payment_events_renewal_charge_stored(conn):
+    """'renewal_charge' event_type stores and retrieves correctly (added in migration 007)."""
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-renewal-001",
+        source_message_id="msg-renewal-001",
+        event_type="renewal_charge",
+        amount=15.49,
+        currency="USD",
+        merchant_name="Netflix",
+    ))
+    conn.commit()
+
+    events = get_payment_events(conn, source_message_id="msg-renewal-001")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "renewal_charge", (
+        f"'renewal_charge' must be a valid event_type. Got {events[0]['event_type']!r}. "
+        f"Migration 007 must add 'renewal_charge' to the CHECK constraint."
+    )
+    assert events[0]["merchant_name"] == "Netflix"
+    assert events[0]["amount"] == pytest.approx(15.49)
+
+
+def test_get_payment_events_no_raw_content(conn):
+    """payment_events rows must not contain any raw email content fields.
+
+    Privacy: the table must have no subject, sender_address, snippet, body_text,
+    or body_html columns. This test verifies the returned dict keys.
+    """
+    insert_payment_event(conn, **_make_payment_event_kwargs())
+    conn.commit()
+
+    events = get_payment_events(conn)
+    assert len(events) == 1
+    ev = dict(events[0])
+
+    forbidden_fields = {"subject", "sender_address", "snippet", "body_text",
+                        "body_html", "short_evidence", "raw_body", "payload"}
+    present_forbidden = forbidden_fields & set(ev.keys())
+    assert not present_forbidden, (
+        f"payment_events must not contain raw email content fields. "
+        f"Found forbidden fields: {present_forbidden}"
+    )
+
+
+def test_get_payment_events_filter_by_source_provider(conn):
+    """get_payment_events(source_provider=...) filters correctly."""
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-gmail-001", source_message_id="msg-gmail-001",
+        source_provider="GMAIL",
+    ))
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-mock-001", source_message_id="msg-mock-001",
+        source_provider="MOCK",
+    ))
+    conn.commit()
+
+    gmail_events = get_payment_events(conn, source_provider="GMAIL")
+    assert len(gmail_events) == 1
+    assert gmail_events[0]["source_provider"] == "GMAIL"
+
+    mock_events = get_payment_events(conn, source_provider="MOCK")
+    assert len(mock_events) == 1
+    assert mock_events[0]["source_provider"] == "MOCK"
+
+
+def test_get_payment_events_filter_by_recurring(conn):
+    """get_payment_events(is_recurring_candidate=1) returns only recurring candidates."""
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-recurring-001", source_message_id="msg-recurring-001",
+        is_recurring_candidate=1,
+    ))
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-nonrecurring-001", source_message_id="msg-nonrecurring-001",
+        is_recurring_candidate=0,
+    ))
+    conn.commit()
+
+    recurring = get_payment_events(conn, is_recurring_candidate=1)
+    assert len(recurring) == 1
+    assert recurring[0]["is_recurring_candidate"] == 1

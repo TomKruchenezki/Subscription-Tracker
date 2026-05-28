@@ -1,5 +1,6 @@
 "use client";
 import type { Subscription } from "@/types/api";
+import { formatMonthly } from "@/lib/format";
 
 interface Props {
   subscriptions: Subscription[];
@@ -14,8 +15,10 @@ const CYCLE_LABELS: Record<string, string> = {
 
 function monthlyEquivalent(sub: Subscription): string {
   if (sub.amount == null) return "—";
+  // Only divide by 12 when billing_cycle is confirmed ANNUAL — not for UNKNOWN cycles.
+  // This prevents ILS₪12.90 with an inferred ANNUAL cycle from showing as ₪1.07/mo.
   const monthly = sub.billing_cycle === "ANNUAL" ? sub.amount / 12 : sub.amount;
-  return `$${monthly.toFixed(2)}/mo`;
+  return formatMonthly(monthly, sub.currency);
 }
 
 export function SubscriptionTable({ subscriptions }: Props) {

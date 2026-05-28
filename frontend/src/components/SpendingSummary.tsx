@@ -1,5 +1,6 @@
 "use client";
 import type { Summary, ScanMode, ScanRange, ScanJobStatus } from "@/types/api";
+import { formatCurrency, formatMonthly } from "@/lib/format";
 
 interface Props {
   summary: Summary;
@@ -36,7 +37,15 @@ export function SpendingSummary({
     <div style={{ display: "flex", gap: "16px", marginBottom: "24px", flexWrap: "wrap" }}>
       <StatCard
         label="Est. monthly cost"
-        value={`$${summary.total_monthly_cost.toFixed(2)}`}
+        value={formatCurrency(summary.total_monthly_cost, summary.currency)}
+        subValue={
+          summary.monthly_costs_by_currency &&
+          Object.keys(summary.monthly_costs_by_currency).length > 1
+            ? Object.entries(summary.monthly_costs_by_currency)
+                .map(([c, v]) => formatMonthly(v, c))
+                .join(" · ")
+            : undefined
+        }
         color="var(--accent)"
       />
       <StatCard label="Active subscriptions" value={summary.active_count.toString()} />
@@ -109,7 +118,7 @@ export function SpendingSummary({
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
+function StatCard({ label, value, subValue, color }: { label: string; value: string; subValue?: string; color?: string }) {
   return (
     <div style={{
       background: "var(--surface)",
@@ -120,6 +129,9 @@ function StatCard({ label, value, color }: { label: string; value: string; color
     }}>
       <div style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>{label}</div>
       <div style={{ fontSize: "22px", fontWeight: 600, color: color ?? "var(--text)" }}>{value}</div>
+      {subValue && (
+        <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "2px" }}>{subValue}</div>
+      )}
     </div>
   );
 }

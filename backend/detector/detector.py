@@ -80,8 +80,8 @@ _CATEGORY_MAP = {
 _STRONG_BILLING_PATTERNS = frozenset({PatternType.RECEIPT, PatternType.RENEWAL})
 
 _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
-    PatternType.RECEIPT:        None,           # resolved at runtime
-    PatternType.RENEWAL:        None,           # resolved at runtime
+    PatternType.RECEIPT:        None,           # resolved at runtime (subscription_started or renewal_charge)
+    PatternType.RENEWAL:        None,           # resolved at runtime (subscription_started or renewal_charge)
     PatternType.TRIAL_END:      "trial_ending",
     PatternType.TRIAL_STARTED:  "trial_started",
     PatternType.CANCELLATION:   "cancellation",
@@ -93,28 +93,35 @@ _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
     PatternType.NONE:           None,
 }
 
+# Maps email_record event_type → payment_events event_type.
+# Only real financial/lifecycle events produce payment_events.
+# "subscription_candidate" and None produce no payment_event.
+_EMAIL_EVENT_TO_PAYMENT_EVENT: dict[str, str] = {
+    "subscription_started": "subscription_charge",
+    "renewal_charge":       "renewal_charge",
+    "refund":               "refund",
+    "cancellation":         "cancellation",
+    "trial_started":        "trial_started",
+    "trial_ending":         "trial_ended",
+    "failed_payment":       "failed_payment",
+    "price_change":         "price_change",
+}
 
-def _map_to_payment_event_type(pattern: PatternType) -> str | None:
-    """Map a PatternType to a payment_events.event_type value.
-    Returns None for NOTIFICATION and PROMOTIONAL — those produce no payment event.
+
+def _map_payment_event_type(email_event_type: str | None) -> str | None:
+    """Convert email_record event_type to payment_events event_type.
+
+    Returns None when no payment_event should be created:
+    - "subscription_candidate" → None (ambiguous, not a confirmed financial event)
+    - "unknown_payment" → None (FLAGGED without confirmed amount; no value as payment_event)
+    - None → None
+
+    This replaces the old pattern-based _map_to_payment_event_type() which incorrectly
+    mapped PatternType.NONE → "unknown_payment", causing every email_record to get a
+    payment_event. Now we derive from email_record event_type which already has full context
+    (was_created, disposition, tier).
     """
-    if pattern in (PatternType.RECEIPT, PatternType.RENEWAL):
-        return "subscription_charge"
-    if pattern == PatternType.REFUND:
-        return "refund"
-    if pattern == PatternType.CANCELLATION:
-        return "cancellation"
-    if pattern == PatternType.TRIAL_STARTED:
-        return "trial_started"
-    if pattern == PatternType.TRIAL_END:
-        return "trial_ended"
-    if pattern == PatternType.FAILED_PAYMENT:
-        return "failed_payment"
-    if pattern == PatternType.PRICE_CHANGE:
-        return "price_change"
-    if pattern == PatternType.NONE:
-        return "unknown_payment"
-    return None   # NOTIFICATION, PROMOTIONAL → no payment event
+    return _EMAIL_EVENT_TO_PAYMENT_EVENT.get(email_event_type or "", None)
 
 
 @dataclass
@@ -298,10 +305,22 @@ def process_email(
             billing_period_end=None,
             short_evidence=short_evidence,
         )
-        # Phase 3.3: also write a payment_event for financial traceability
-        pe_event_type = _map_to_payment_event_type(pattern)
+        # Write a payment_event only for confirmed financial/lifecycle events.
+        # Derive type from email_record event_type (not from pattern) — it already has
+        # full context (was_created, disposition, tier) and avoids the old bug where
+        # every PatternType.NONE email created an "unknown_payment" event.
+        pe_event_type = _map_payment_event_type(event_type)
         if pe_event_type is not None:
             pe_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{email.source_message_id}:{pe_event_type}"))
+            # is_recurring_candidate: only when there is a confirmed subscription charge or renewal
+            # with a known amount — not just any RECEIPT/RENEWAL pattern.
+            is_recurring = int(
+                pe_event_type in ("subscription_charge", "renewal_charge") and amount is not None
+            )
+            is_one_time = int(
+                pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
+                and amount is not None
+            )
             insert_payment_event(
                 conn,
                 event_id=pe_id,
@@ -313,10 +332,8 @@ def process_email(
                 currency=currency,
                 merchant_name=canonical_name,
                 event_date=email_date_str,
-                is_recurring_candidate=1 if pattern in _STRONG_BILLING_PATTERNS else 0,
-                is_one_time_candidate=1 if (
-                    pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
-                ) else 0,
+                is_recurring_candidate=is_recurring,
+                is_one_time_candidate=is_one_time,
                 subscription_id=subscription_id,
                 confidence_score=score,
             )
@@ -348,28 +365,31 @@ def process_email(
             billing_period_end=None,
             short_evidence=short_evidence,
         )
-        # Phase 3.3: write payment_event for FLAGGED financial signals too
-        pe_event_type = _map_to_payment_event_type(pattern)
-        if pe_event_type is not None:
-            pe_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{email.source_message_id}:{pe_event_type}"))
-            insert_payment_event(
-                conn,
-                event_id=pe_id,
-                source_message_id=email.source_message_id,
-                source_provider=email.source_provider,
-                source_account_id=email.source_account_id,
-                event_type=pe_event_type,
-                amount=amount,
-                currency=currency,
-                merchant_name=canonical_name,
-                event_date=email_date_str,
-                is_recurring_candidate=1 if pattern in _STRONG_BILLING_PATTERNS else 0,
-                is_one_time_candidate=1 if (
-                    pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
-                ) else 0,
-                subscription_id=None,
-                confidence_score=score,
-            )
+        # Write payment_event for FLAGGED emails only when a real financial signal exists:
+        # - amount must be confirmed (None → no payment value to record)
+        # - event_type must map to a known financial event (NONE and NOTIFICATION → None)
+        # This prevents the FLAGGED path from mirroring all 69 FLAGGED email_records as
+        # "unknown_payment" events, which made payment_events == email_records in count.
+        if amount is not None and event_type is not None:
+            pe_event_type_flagged = _map_payment_event_type(event_type)
+            if pe_event_type_flagged is not None:
+                pe_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{email.source_message_id}:{pe_event_type_flagged}"))
+                insert_payment_event(
+                    conn,
+                    event_id=pe_id,
+                    source_message_id=email.source_message_id,
+                    source_provider=email.source_provider,
+                    source_account_id=email.source_account_id,
+                    event_type=pe_event_type_flagged,
+                    amount=amount,
+                    currency=currency,
+                    merchant_name=canonical_name,
+                    event_date=email_date_str,
+                    is_recurring_candidate=0,  # FLAGGED = unconfirmed sender; never auto-recurring
+                    is_one_time_candidate=int(billing_cycle == "UNKNOWN"),
+                    subscription_id=None,   # FLAGGED events never link to subscriptions
+                    confidence_score=score,
+                )
         conn.commit()
 
     # IGNORED: nothing stored

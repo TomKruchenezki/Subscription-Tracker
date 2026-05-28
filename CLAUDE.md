@@ -5,7 +5,7 @@ by reading Gmail metadata only (sender, subject, date — never body). All data 
 a local SQLite file. No cloud sync, no bank access, no telemetry.
 
 **Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 3.0 complete — HTML extraction fixed. See `docs/CURRENT_STATE.md`.
+**Current phase:** Phase 3.3B complete — payment event semantics, native currency (₪/$), GET /api/payment-events, frontend PaymentEventsTable. See `docs/CURRENT_STATE.md`.
 
 ---
 
@@ -36,6 +36,7 @@ Invoke the appropriate subagent for each task type. When in doubt, invoke
 |---|---|
 | Product scope, user stories, feature approval, new data fields | `product-architect` |
 | ANY auth/schema/data-collection/API/dependency change (mandatory gate) | `privacy-security-reviewer` |
+| payment_events quality, currency correctness, one-time vs recurring, refund handling | `payment-data-quality-reviewer` |
 | Gmail API calls, OAuth flow, token storage, rate limiting | `gmail-integration-specialist` |
 | Subject line parsing, amount extraction, sender resolution, cycle detection | `email-parser-specialist` |
 | Detection rules, confidence scoring, sender domain list, categorization | `subscription-detection-specialist` |
@@ -66,8 +67,9 @@ Both approvals are required for any new `email_records` or `subscriptions` colum
 | 1 | Mock data + local detection engine | Complete |
 | 2 | Gmail OAuth integration (read-only) | Complete |
 | 3.0 | HTML body extraction fixes | **Complete** |
-| 3.1 | payment_events + event linking | Next |
-| 3.2 | Provider-specific parsers | Planned |
+| 3.1 | payment_events + native currency + subscription linking | **Complete** |
+| 3.3B | payment_events semantics + GET /api/payment-events + frontend PaymentEventsTable + billing cycle fix | **Complete** |
+| 3.2 | Provider-specific parsers | Next |
 | 3.3 | Attachment/PDF parsing | Planned |
 | Future | AI parsing, bank integration | Not planned |
 
@@ -99,10 +101,16 @@ subscription-tracker/
   .claude/agents/
     product-architect.md
     privacy-security-reviewer.md
+    payment-data-quality-reviewer.md
     gmail-integration-specialist.md
     email-parser-specialist.md
     subscription-detection-specialist.md
     qa-test-reviewer.md
+
+  .claude/skills/
+    phase-plan/SKILL.md          ← planning skill: diagnose → scope → tests → stop
+    scan-diagnosis/SKILL.md      ← analyze validation_report output and scan results
+    privacy-review/SKILL.md      ← privacy checklist for payment_events + new tables
 
   backend/                       ← Phase 1+ (does not exist yet)
     sources/                     ← mock.py, gmail.py, factory.py
@@ -153,32 +161,64 @@ subscription-tracker/
 - Run `pytest tests/privacy/` — must pass at 100%
 - Every PR description must answer: "What data does this change collect, store, or transmit?"
 
+**After every phase completes:** Update `docs/CURRENT_STATE.md` with:
+- What changed (new tables, bug fixes, new features)
+- Current known problems
+- Latest test count and pass/fail status
+- Next recommended phase
+- Exact verification commands (privacy gate, full suite, validation report command)
+
+**User-visible acceptance criteria (required for every product feature):**
+Every feature must specify where the user sees it in the app. If a backend change is
+intentionally backend-only (e.g., a schema migration or internal refactor), state that
+explicitly and confirm with the user. "The validation report shows it" is not sufficient
+unless the feature is explicitly scoped as backend-only.
+
+**Product acceptance gate (required before marking a phase complete):**
+Before closing any phase, answer all four:
+1. What changed for the user? (be specific — which screen/section)
+2. Which API endpoint or UI component exposes it?
+3. How can the user verify it without running a script or reading code?
+4. Is `validation_report.py` the only visible evidence? If yes, is that accepted scope?
+
+**No invisible feature completion:**
+A phase is not complete if its new capability exists only in backend code, the DB schema,
+or `validation_report.py` output — unless the phase was explicitly scoped as backend-only
+and the user confirmed that scope before implementation began. Invoke `product-acceptance-reviewer`
+before marking any feature-phase done.
+
 ---
 
-## Cost-Discipline Rules (Token Efficiency)
+## Context Budget Modes
 
-Follow in every session unless the user explicitly overrides.
+Choose the mode that matches the task. Do not default to minimal-read mode for
+architectural work — shallow context produces bad plans.
 
-1. **Read `docs/CURRENT_STATE.md` first.** It has the current phase, test count, known
-   problems, and verification commands. Do not infer project state from other files.
-2. **Do not read the whole repo.** Inspect only files relevant to the current task.
-   Use Grep/Glob to locate files; Read only what is needed.
-3. **Use Plan Mode for broad changes.** Any change touching > 2 files or requiring
-   architectural decisions must use Plan Mode before any edits.
-4. **No implementation before explicit approval.** Wait for ExitPlanMode approval before
-   writing code. "Sounds good" is not approval.
-5. **Targeted tests first.** Run `python -m pytest tests/unit/test_<module>.py -q`
-   while iterating. Save the full suite for the end.
-6. **Full pytest only at the end.** Run `python -m pytest tests/ -q` once, after all
-   changes are complete. Do not run it speculatively between edits.
-7. **TypeScript check only if frontend changed.** Run `cd frontend && npm run type-check`
-   only when `.tsx`/`.ts` files were modified.
-8. **Do not spawn subagents unless explicitly asked.** Each spawn starts cold and
-   re-derives context expensively. Handle tasks inline with direct tools.
-9. **Keep summaries concise.** 3–5 bullet points after task completion. No verbatim
-   plan recap.
-10. **Never print raw email content.** Do not output email bodies, snippets, OAuth tokens,
-    DB row contents, or secrets — even in debug output or code comments.
+### NORMAL mode
+Use for: targeted bug fixes, adding patterns, updating tests, small UI tweaks.
+- Read `docs/CURRENT_STATE.md` first — it has phase, test count, known problems, and
+  verification commands. Do not infer project state from other files.
+- Then read only files directly relevant to the task. Use Grep/Glob to locate; Read only what is needed.
+- Targeted tests first (`python -m pytest tests/unit/test_<module>.py -q`). Full suite once at the end.
+- TypeScript check only when `.tsx`/`.ts` files were changed.
+- Use Plan Mode for any change touching > 2 files or requiring architectural decisions.
+- No implementation before explicit ExitPlanMode approval. "Sounds good" is not approval.
+- Keep summaries concise: 3–5 bullet points. No verbatim plan recap.
+
+### DEEP ARCHITECTURE mode
+Use for: payment_events, subscription linking, multi-account scanning, provider parsers,
+PDF parsing, new migrations, or any change touching > 3 files or > 1 subsystem.
+- Read all genuinely relevant backend + schema + test files for the area being changed.
+- **Depth is preferred over token savings.** A correct plan is worth the extra reads.
+- Still avoid files unrelated to the change (unrelated auth, unrelated routers, frontend when backend-only, etc.).
+- Always use Plan Mode. Always run the full test suite at the end.
+
+### NEVER mode (always active, overrides everything)
+Never read or print, under any circumstances:
+- `.env`, `.env.local`, any file containing secrets or tokens
+- Raw email bodies, raw HTML, snippets, or OAuth token values
+- Raw DB row contents that include user PII
+- Binary files, images, or media unless explicitly asked by the user
 
 ---
 

@@ -191,3 +191,141 @@ def test_hebrew_every_month_is_monthly():
 def test_hebrew_every_year_is_annual():
     """כל שנה (every year, Hebrew) → ANNUAL (strong positional pattern)."""
     assert detect_cycle("כל שנה ₪99") == "ANNUAL"
+
+
+# ── Phase 3.3B: body_text weak pattern restriction ────────────────────────────
+#
+# Weak patterns (standalone "annual", "weekly", "monthly" + billing context) must NOT
+# fire from body_text. Billing receipt bodies almost always contain billing context words,
+# so allowing weak patterns from body_text causes systematic misclassification
+# (e.g., Spotify monthly receipt body mentioning "annual plan" → ANNUAL).
+# Only strong positional patterns (/year, per month, /week, etc.) fire from body_text.
+
+def test_annual_weak_in_body_text_only_returns_unknown():
+    """'annual' + billing context in body_text only (neutral subject/snippet) → UNKNOWN.
+
+    Phase 3.3B fix: weak ANNUAL pattern must be suppressed for body_text.
+    Before fix: this returned ANNUAL, causing Spotify monthly receipts to get ANNUAL cycle.
+    """
+    result = detect_cycle(
+        subject="קבלה על תשלום",           # "receipt for payment" — no cycle word
+        snippet=None,
+        body_text="Save with Annual plan — switch to annual and save. Subscription billed monthly.",
+    )
+    # 'annual' + 'Subscription' (billing context) in body_text must NOT fire ANNUAL
+    # 'monthly' + 'billed' (billing context) in body_text must NOT fire MONTHLY (weak)
+    # No strong positional pattern (/year, per year, /mo, etc.) → UNKNOWN
+    assert result == "UNKNOWN", (
+        f"Weak 'annual' in body_text + billing context must not fire ANNUAL cycle. "
+        f"Got {result!r}. This is the Phase 3.3B Spotify $1.07/mo root cause fix."
+    )
+
+
+def test_annual_strong_in_body_text_does_fire():
+    """'/year' (strong positional) in body_text still fires ANNUAL.
+
+    Strong patterns are not restricted to subject/snippet — they fire from any source.
+    """
+    result = detect_cycle(
+        subject="Your receipt",
+        snippet=None,
+        body_text="You were charged $99.00/year for your plan.",
+    )
+    assert result == "ANNUAL", (
+        f"Strong '/year' pattern must fire from body_text. Got {result!r}."
+    )
+
+
+def test_weekly_weak_in_body_text_only_returns_unknown():
+    """'weekly' + billing context in body_text only (neutral subject/snippet) → UNKNOWN.
+
+    Phase 3.3B fix: weak WEEKLY pattern must be suppressed for body_text.
+    Before fix: this returned WEEKLY, causing Zoom receipts with marketing text to get WEEKLY.
+    """
+    result = detect_cycle(
+        subject="Payment Processed",        # no cycle word
+        snippet=None,
+        body_text="Your weekly subscription includes unlimited meeting minutes. Payment receipt.",
+    )
+    assert result == "UNKNOWN", (
+        f"Weak 'weekly' in body_text + billing context must not fire WEEKLY cycle. "
+        f"Got {result!r}. This is the Zoom WEEKLY misclassification fix."
+    )
+
+
+def test_per_week_strong_in_body_text_does_fire():
+    """'per week' (strong positional) in body_text still fires WEEKLY."""
+    result = detect_cycle(
+        subject="Your receipt",
+        snippet=None,
+        body_text="Charged $9.99 per week.",
+    )
+    assert result == "WEEKLY", (
+        f"Strong 'per week' must fire from body_text. Got {result!r}."
+    )
+
+
+def test_monthly_weak_in_body_text_only_returns_unknown():
+    """'monthly' + billing context in body_text only → UNKNOWN (weak pattern suppressed)."""
+    result = detect_cycle(
+        subject="Your receipt",             # no cycle keyword in subject
+        snippet=None,
+        body_text="This is a monthly subscription charge for your account. Thank you.",
+    )
+    assert result == "UNKNOWN", (
+        f"Weak 'monthly' in body_text must not fire (subject/snippet have no cycle signal). "
+        f"Got {result!r}."
+    )
+
+
+def test_monthly_strong_in_body_text_does_fire():
+    """/mo in body_text still fires MONTHLY (strong positional pattern)."""
+    result = detect_cycle(
+        subject="Your receipt",
+        snippet=None,
+        body_text="Your plan: $9.99/mo",
+    )
+    assert result == "MONTHLY", (
+        f"Strong '/mo' must fire from body_text. Got {result!r}."
+    )
+
+
+def test_subject_wins_over_body_text_weak():
+    """When subject has a strong signal, body_text weak patterns don't interfere."""
+    result = detect_cycle(
+        subject="Your monthly subscription renewal",
+        snippet=None,
+        body_text="Annual plan available — switch today. Your subscription payment was processed.",
+    )
+    # Subject provides MONTHLY via 'monthly' + 'subscription' (billing context in subject)
+    assert result == "MONTHLY", (
+        f"Subject-level 'monthly' signal must win. Got {result!r}."
+    )
+
+
+def test_spotify_monthly_receipt_body_annual_mention():
+    """Realistic Spotify regression: monthly receipt email with 'annual' in body → UNKNOWN or MONTHLY.
+
+    If the subject/snippet have the billing cycle clearly (e.g. ₪12.90/mo in snippet),
+    MONTHLY is returned. If not (subject only says 'receipt'), and body says 'annual plan',
+    the correct result is UNKNOWN — not ANNUAL.
+    """
+    # Case 1: subject/snippet have explicit monthly signal → MONTHLY
+    result_with_snippet = detect_cycle(
+        subject="קבלה - Spotify Premium",
+        snippet="₪12.90/mo — חיוב חודשי",   # /mo + Hebrew 'monthly' (strong)
+        body_text="Save 15% with Annual plan. Annual subscription available.",
+    )
+    assert result_with_snippet == "MONTHLY"
+
+    # Case 2: only subject, no snippet, body mentions "annual" + "subscription" (billing context)
+    # → body_text weak pattern suppressed → UNKNOWN (not ANNUAL)
+    result_body_only = detect_cycle(
+        subject="קבלה - Spotify Premium",
+        snippet=None,
+        body_text="Upgrade to Annual plan — save 15%. Your subscription is billed. Receipt enclosed.",
+    )
+    assert result_body_only == "UNKNOWN", (
+        f"'annual' + 'subscription' in body_text only must not infer ANNUAL cycle. "
+        f"Got {result_body_only!r}. This prevents Spotify ÷12 bug."
+    )

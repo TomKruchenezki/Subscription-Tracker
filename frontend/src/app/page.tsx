@@ -3,7 +3,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import { SpendingSummary } from "@/components/SpendingSummary";
 import { SubscriptionTable } from "@/components/SubscriptionTable";
-import type { Subscription, Summary, ScanMode, ScanRange, ScanResult, ScanJobStatus } from "@/types/api";
+import { PaymentEventsTable } from "@/components/PaymentEventsTable";
+import type { Subscription, Summary, ScanMode, ScanRange, ScanResult, ScanJobStatus, PaymentEvent } from "@/types/api";
 
 interface LastScan extends ScanResult {
   mode: ScanMode;
@@ -13,6 +14,7 @@ interface LastScan extends ScanResult {
 export default function DashboardPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [paymentEvents, setPaymentEvents] = useState<PaymentEvent[]>([]);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<string>("…");
@@ -28,14 +30,16 @@ export default function DashboardPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [subs, sum, health] = await Promise.all([
+      const [subs, sum, health, events] = await Promise.all([
         api.subscriptions(),
         api.summary(),
         api.health(),
+        api.paymentEvents(),
       ]);
       setSubscriptions(subs);
       setSummary(sum);
       setMode(health.mode);
+      setPaymentEvents(events);
       setError(null);
     } catch {
       setError("Cannot reach the API server. Make sure `python main.py` is running.");
@@ -200,6 +204,21 @@ export default function DashboardPage() {
 
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
         <SubscriptionTable subscriptions={subscriptions} />
+      </div>
+
+      {/* Payment Events — financial event log (Phase 3.3B) */}
+      <div style={{ marginTop: "24px" }}>
+        <h2 style={{ fontSize: "16px", fontWeight: 600, marginBottom: "12px", color: "var(--text)" }}>
+          Payment Events
+          {paymentEvents.length > 0 && (
+            <span style={{ marginLeft: "8px", fontSize: "13px", fontWeight: 400, color: "var(--muted)" }}>
+              ({paymentEvents.length})
+            </span>
+          )}
+        </h2>
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden", padding: "0 16px" }}>
+          <PaymentEventsTable events={paymentEvents} />
+        </div>
       </div>
     </>
   );
