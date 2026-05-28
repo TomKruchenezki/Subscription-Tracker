@@ -537,6 +537,88 @@ def report(db_path: str, use_mock: bool) -> None:
         else:
             print("    (no ACTIVE subscriptions)")
 
+    # ── Known Provider Coverage (Phase 3.4) ──────────────────────────────────
+    print(_header("Known Provider Coverage"))
+
+    # Canonical provider names to check for. These are the most common services
+    # that should appear if the user has subscribed to them.
+    _KNOWN_PROVIDERS = [
+        "Spotify", "Netflix", "ChatGPT", "Claude", "Google One",
+        "Apple", "Apple Music", "iCloud+", "GitHub", "Zoom",
+        "OpenAI", "Notion", "Wolt+", "YouTube Premium",
+        "LinkedIn Premium", "Grammarly", "Canva",
+    ]
+
+    found_any_providers = False
+    for provider in _KNOWN_PROVIDERS:
+        # Check subscriptions (any status)
+        sub_count = _run(conn,
+            "SELECT COUNT(*) FROM subscriptions WHERE name = ? AND source_provider != 'MOCK'",
+            (provider,))[0][0]
+        # Check email_records (canonical_name not stored — check by sender pattern if possible)
+        # payment_events stores merchant_name which is the canonical name
+        pe_count = 0
+        if has_payment_events:
+            pe_count = _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE merchant_name = ?",
+                (provider,))[0][0]
+
+        if sub_count > 0:
+            active_sub = _run(conn,
+                "SELECT status, amount, billing_cycle FROM subscriptions WHERE name = ? AND source_provider != 'MOCK' LIMIT 1",
+                (provider,))[0]
+            status = active_sub["status"] or "?"
+            amt = _fmt_amount(active_sub["amount"])
+            cycle = (active_sub["billing_cycle"] or "?")[:8]
+            print(f"  FOUND   {provider:<20}  {status:<10} {amt}  {cycle}")
+            found_any_providers = True
+        elif pe_count > 0:
+            print(f"  EVENTS  {provider:<20}  {pe_count} payment event(s), no subscription created")
+            found_any_providers = True
+        # else: not in DB — could be outside scan range or not subscribed
+
+    if not found_any_providers:
+        print("  (no known providers detected — run a scan first)")
+    else:
+        print(f"\n  Tip: Run a forensic scan (2y+ range) to maximize recall.")
+        print(f"  Missing providers may be outside the current scan range.")
+
+    # ── Unconfirmed Subscriptions Detail (Phase 3.4) ──────────────────────────
+    unconfirmed_subs = _run(conn,
+        """SELECT name, billing_cycle, amount, source_provider,
+                  (SELECT COUNT(*) FROM email_records er WHERE er.subscription_id = s.subscription_id) AS email_count,
+                  (SELECT COUNT(*) FROM payment_events pe WHERE pe.subscription_id = s.subscription_id) AS pe_count
+           FROM subscriptions s
+           WHERE status = 'UNKNOWN' AND source_provider != 'MOCK'
+           ORDER BY name""")
+
+    if unconfirmed_subs:
+        print(_header(f"Unconfirmed Subscriptions ({len(unconfirmed_subs)})"))
+        print(f"  These were detected but amount or cycle is uncertain.")
+        print(f"  Edit in dashboard to confirm or delete as false positive.\n")
+        for row in unconfirmed_subs:
+            amt_str = "no amount" if row["amount"] is None else f"{_fmt_amount(row['amount'])}"
+            cycle = row["billing_cycle"] or "?"
+            emails = row["email_count"] or 0
+            hint = "amount not in subject" if row["amount"] is None else "cycle unclear"
+            print(f"  {row['name']:<22}  {amt_str}  {cycle:<8}  ({emails} email(s), {hint})")
+
+    # ── Attachment Review Queue (Phase 3.4) ───────────────────────────────────
+    if has_payment_events:
+        attach_count = _run(conn,
+            "SELECT COUNT(*) FROM payment_events WHERE needs_attachment_review = 1")[0][0]
+        if attach_count > 0:
+            print(_header(f"Attachment Review Queue ({attach_count})"))
+            print(f"  These events have a known merchant but amount is in an attachment.")
+            print(f"  Amount extraction from PDF/HTML not yet implemented (Phase 3.5).\n")
+            attach_rows = _run(conn,
+                """SELECT merchant_name, event_type, event_date
+                   FROM payment_events WHERE needs_attachment_review = 1
+                   ORDER BY event_date DESC""")
+            for row in attach_rows:
+                date_str = (row["event_date"] or "?")[:10]
+                print(f"  {date_str}  {row['merchant_name']:<22}  {row['event_type']}")
+
     # ── UI Visibility Checklist (Phase 3.3B) ──────────────────────────────────
     print(_header("UI Visibility Checklist"))
 
@@ -577,6 +659,33 @@ def report(db_path: str, use_mock: bool) -> None:
         _flag_ratio_final = _flag(ratio_ok_final, warn=not ratio_ok_final)
         print(f"  payment_events not mirroring emails:   {_flag_ratio_final}  "
               f"{total_pe} events vs {total_records} records")
+
+    # Phase 3.4 checks
+    sub_router_path = _project_root / "backend" / "api" / "routers" / "subscriptions.py"
+    _has_crud = False
+    if sub_router_path.exists():
+        sub_router_content = sub_router_path.read_text(encoding="utf-8")
+        _has_crud = "create_subscription_manual" in sub_router_content and "delete_subscription" in sub_router_content
+    _flag_crud = _flag(_has_crud)
+    print(f"  Manual CRUD endpoints (create/delete):  {_flag_crud}  "
+          f"({'found' if _has_crud else 'MISSING — POST/DELETE /api/subscriptions not implemented'})")
+
+    sub_table_path = _project_root / "frontend" / "src" / "components" / "SubscriptionTable.tsx"
+    _has_edit = False
+    if sub_table_path.exists():
+        st_content = sub_table_path.read_text(encoding="utf-8")
+        _has_edit = "EditRow" in st_content and "Unconfirmed" in st_content
+    _flag_edit = _flag(_has_edit)
+    print(f"  SubscriptionTable edit+sections:        {_flag_edit}  "
+          f"({'found' if _has_edit else 'MISSING — edit/delete/create buttons not implemented'})")
+
+    wolt_in_tier1 = False
+    sender_list_path = _project_root / "backend" / "detector" / "sender_list.py"
+    if sender_list_path.exists():
+        wolt_in_tier1 = "wolt.com" in sender_list_path.read_text(encoding="utf-8")
+    _flag_wolt = _flag(wolt_in_tier1)
+    print(f"  Wolt in Tier 1 sender list:             {_flag_wolt}  "
+          f"({'found' if wolt_in_tier1 else 'MISSING — Wolt+ not detectable in quick mode'})")
 
     # ── Duplicates ────────────────────────────────────────────────────────────
     print(_header("Duplicates"))

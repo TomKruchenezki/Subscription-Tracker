@@ -94,6 +94,17 @@ TIER_1: dict[str, str] = {
     "e.linkedin.com": "LinkedIn Premium",
     "mcee.linkedin.com": "LinkedIn Premium",
 
+    # ── Food / Delivery subscriptions ─────────────────────────────────────────
+    # Wolt+ is a recurring delivery subscription. Food order receipts from wolt.com
+    # are also Tier 1 so they are classified and surfaced (is_one_time_candidate for
+    # individual orders; Wolt+ renewal subject lines → is_recurring_candidate).
+    "wolt.com":      "Wolt+",
+    "mail.wolt.com": "Wolt+",
+    "wolt.fi":       "Wolt+",   # Finland
+    "wolt.de":       "Wolt+",   # Germany
+    "wolt.at":       "Wolt+",   # Austria
+    "wolt.il":       "Wolt+",   # Israel
+
     # ── Payment (own subscription receipts) ────────────────────────────────────
     "paypal.com": "PayPal",
 }

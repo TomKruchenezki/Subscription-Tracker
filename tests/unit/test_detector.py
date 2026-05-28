@@ -798,3 +798,103 @@ def test_payment_events_total_less_than_email_records(conn):
             f"Non-financial email {msg_id} must not produce payment_events, "
             f"got {len(events)}. Phase 3.3 bug: every email was creating a payment_event."
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.4: needs_attachment_review flag
+# ---------------------------------------------------------------------------
+
+def test_needs_attachment_review_set_when_tier1_no_amount(conn):
+    """Tier 1 sender + RECEIPT/RENEWAL pattern + no extractable amount →
+    payment_event.needs_attachment_review = 1 (amount is probably in a PDF attachment).
+    """
+    # Netflix receipt with no dollar amount in subject — amount might be in PDF
+    email = _make_email(
+        "pe-attach-001",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt",   # RECEIPT pattern, no amount
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Tier 1 + RECEIPT pattern must be DETECTED, got {result.disposition}"
+    )
+    events = get_payment_events(conn, source_message_id="pe-attach-001")
+    assert len(events) == 1, f"Expected 1 payment_event, got {len(events)}"
+    assert events[0]["needs_attachment_review"] == 1, (
+        f"Tier 1 + RECEIPT + no amount must set needs_attachment_review=1, "
+        f"got {events[0]['needs_attachment_review']}. "
+        f"This flags events where amount is likely in an attached PDF."
+    )
+
+
+def test_needs_attachment_review_not_set_when_amount_present(conn):
+    """When amount IS extractable, needs_attachment_review must be 0."""
+    email = _make_email(
+        "pe-attach-002",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",  # amount in subject
+    )
+    process_email(conn, email)
+    events = get_payment_events(conn, source_message_id="pe-attach-002")
+    assert len(events) == 1
+    assert events[0]["needs_attachment_review"] == 0, (
+        f"When amount IS extractable, needs_attachment_review must be 0, "
+        f"got {events[0]['needs_attachment_review']}"
+    )
+
+
+def test_needs_attachment_review_not_set_for_tier0_no_amount(conn):
+    """Tier 0 (unknown) sender + no amount → needs_attachment_review must be 0.
+
+    Only Tier 1 senders (confirmed subscription services) get the attachment flag.
+    Unknown senders with no amount are just ambiguous, not PDF-attachment cases.
+    """
+    email = _make_email(
+        "pe-attach-003",
+        "billing@unknownservice.example.com",
+        "Payment confirmation for your subscription",  # receipt-like but unknown sender
+    )
+    process_email(conn, email)
+    events = get_payment_events(conn, source_message_id="pe-attach-003")
+    # May produce 0 events (FLAGGED with no amount → no event per Phase 3.3B fix)
+    for ev in events:
+        assert ev["needs_attachment_review"] == 0, (
+            f"Tier 0 sender must not set needs_attachment_review=1, "
+            f"got needs_attachment_review={ev['needs_attachment_review']}"
+        )
+
+
+def test_wolt_plus_renewal_detected(conn):
+    """wolt.com Tier 1 sender + RENEWAL subject → DETECTED (Phase 3.4 recall improvement)."""
+    email = _make_email(
+        "wolt-001",
+        "noreply@wolt.com",
+        "Your Wolt+ subscription renewal - $9.99",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"wolt.com Tier 1 + RENEWAL pattern must be DETECTED, got {result.disposition}. "
+        f"Wolt+ was added to Tier 1 in Phase 3.4."
+    )
+    subs = get_subscriptions(conn)
+    wolt_subs = [s for s in subs if "Wolt" in s["name"]]
+    assert len(wolt_subs) >= 1, "Wolt+ subscription must be created after DETECTED"
+
+
+def test_apple_music_subscription_gets_correct_name(conn):
+    """Apple sender + 'Apple Music' subject → subscription named 'Apple Music', not 'Apple'."""
+    email = _make_email(
+        "apple-music-001",
+        "no-reply@apple.com",
+        "Your Apple Music membership receipt - $10.99",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Apple (Tier 1) + RECEIPT + amount must be DETECTED, got {result.disposition}"
+    )
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["name"] == "Apple Music", (
+        f"Apple sender + 'Apple Music' subject must create subscription named 'Apple Music', "
+        f"got {subs[0]['name']!r}. Apple product disambiguation (Phase 3.4) must be working."
+    )

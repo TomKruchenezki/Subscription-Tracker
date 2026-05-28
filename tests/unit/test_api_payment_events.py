@@ -145,3 +145,113 @@ def test_get_payment_events_recurring_filter(client, db_path):
     data = response.json()
     assert len(data) == 1
     assert data[0]["is_recurring_candidate"] == 1
+
+
+# ── Phase 3.4: link/unlink endpoints ─────────────────────────────────────────
+
+def _insert_subscription(db_path: str, sub_id: str = "sub-link-001") -> str:
+    """Helper: insert a subscription for linking tests."""
+    import sqlite3 as _sqlite
+    conn = _sqlite.connect(db_path)
+    conn.execute("""
+        INSERT OR IGNORE INTO subscriptions
+            (subscription_id, name, billing_cycle, category, status, source_provider, first_seen, last_seen)
+        VALUES (?, ?, 'MONTHLY', 'OTHER', 'ACTIVE', 'MOCK', datetime('now'), datetime('now'))
+    """, (sub_id, "Test Sub"))
+    conn.commit()
+    conn.close()
+    return sub_id
+
+
+def test_link_payment_event(client, db_path):
+    """POST /api/payment-events/{event_id}/link links the event to a subscription."""
+    _insert_test_event(db_path, event_id="pe-link-001", source_message_id="msg-link-001")
+    sub_id = _insert_subscription(db_path, "sub-link-001")
+
+    response = client.post(
+        "/api/payment-events/pe-link-001/link",
+        json={"subscription_id": sub_id},
+    )
+    assert response.status_code == 200, (
+        f"POST /api/payment-events/{{event_id}}/link must return 200, got {response.status_code}: {response.text}"
+    )
+    data = response.json()
+    assert data["event_id"] == "pe-link-001"
+    assert data["subscription_id"] == sub_id
+
+    # Verify the DB was updated
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT subscription_id FROM payment_events WHERE event_id = ?", ("pe-link-001",)
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == sub_id, f"subscription_id must be updated in DB, got {row[0]!r}"
+
+
+def test_link_nonexistent_event_returns_404(client, db_path):
+    """POST /api/payment-events/{unknown_id}/link must return 404."""
+    _insert_subscription(db_path, "sub-link-404")
+    response = client.post(
+        "/api/payment-events/pe-does-not-exist/link",
+        json={"subscription_id": "sub-link-404"},
+    )
+    assert response.status_code == 404, (
+        f"Linking a nonexistent event must return 404, got {response.status_code}"
+    )
+
+
+def test_unlink_payment_event(client, db_path):
+    """POST /api/payment-events/{event_id}/unlink clears the subscription_id."""
+    _insert_test_event(db_path, event_id="pe-unlink-001", source_message_id="msg-unlink-001")
+    sub_id = _insert_subscription(db_path, "sub-unlink-001")
+
+    # First link it
+    client.post(
+        "/api/payment-events/pe-unlink-001/link",
+        json={"subscription_id": sub_id},
+    )
+
+    # Now unlink
+    response = client.post("/api/payment-events/pe-unlink-001/unlink")
+    assert response.status_code == 200, (
+        f"POST /api/payment-events/{{event_id}}/unlink must return 200, got {response.status_code}: {response.text}"
+    )
+    data = response.json()
+    assert data["event_id"] == "pe-unlink-001"
+    assert data["subscription_id"] is None
+
+    # Verify DB
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT subscription_id FROM payment_events WHERE event_id = ?", ("pe-unlink-001",)
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] is None, f"subscription_id must be NULL after unlink, got {row[0]!r}"
+
+
+def test_unlink_nonexistent_event_returns_404(client):
+    """POST /api/payment-events/{unknown_id}/unlink must return 404."""
+    response = client.post("/api/payment-events/pe-nonexistent/unlink")
+    assert response.status_code == 404, (
+        f"Unlinking a nonexistent event must return 404, got {response.status_code}"
+    )
+
+
+def test_needs_attachment_review_field_in_response(client, db_path):
+    """GET /api/payment-events response must include needs_attachment_review field."""
+    _insert_test_event(db_path,
+                       event_id="pe-attach-api-001",
+                       source_message_id="msg-attach-api-001",
+                       needs_attachment_review=1)
+    response = client.get("/api/payment-events")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) >= 1
+    ev = next((e for e in data if e["event_id"] == "pe-attach-api-001"), None)
+    assert ev is not None
+    assert "needs_attachment_review" in ev, (
+        "GET /api/payment-events response must include needs_attachment_review field (Phase 3.4)"
+    )
+    assert ev["needs_attachment_review"] == 1

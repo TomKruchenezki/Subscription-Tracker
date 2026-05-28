@@ -52,7 +52,7 @@ export interface ConnectedAccount {
 }
 
 export type ScanMode = "quick" | "deep" | "forensic";
-export type ScanRange = "1m" | "3m" | "6m" | "1y" | "2y" | "5y";
+export type ScanRange = "1m" | "3m" | "6m" | "1y" | "2y" | "5y" | "custom";
 
 export interface ScanRequest {
   mode?: ScanMode;
@@ -75,6 +75,7 @@ export interface Summary {
   active_count: number;
   detected_count: number;
   flagged_count: number;
+  unconfirmed_count: number;  // Phase 3.4: count of UNKNOWN-status subscriptions
   has_mock_data?: boolean;  // present in Gmail mode; true when MOCK rows exist but are excluded
   monthly_costs_by_currency?: Record<string, number>;  // Phase 3.3: per-currency monthly totals
 }
@@ -88,11 +89,33 @@ export interface PaymentEvent {
   event_date: string;
   is_recurring_candidate: 0 | 1;
   is_one_time_candidate: 0 | 1;
+  needs_attachment_review: 0 | 1;  // Phase 3.4: amount is in an attachment (PDF)
   subscription_id: string | null;
   confidence_score: number;
   source_provider: string;
   source_message_id: string;
   created_at: string;
+}
+
+// Phase 3.4: Manual CRUD request bodies
+export interface CreateSubscriptionRequest {
+  name: string;
+  amount?: number | null;
+  currency?: string;
+  billing_cycle?: string;
+  category?: string;
+  status?: string;
+  service_url?: string | null;
+}
+
+export interface UpdateSubscriptionRequest {
+  name?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  billing_cycle?: string | null;
+  status?: string | null;
+  category?: string | null;
+  service_url?: string | null;
 }
 
 export interface ScanJobStatus {

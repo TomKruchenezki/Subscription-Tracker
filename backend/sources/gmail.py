@@ -45,7 +45,7 @@ _PASSES: dict[int, str] = {
         "OR 1password.com OR linear.app OR vercel.com OR digitalocean.com "
         "OR substack.com OR nytimes.com OR canva.com OR wix.com OR udemy.com "
         "OR coursera.org OR linkedin.com OR grammarly.com OR nordvpn.com "
-        "OR monday.com OR airtable.com OR paypal.com)"
+        "OR monday.com OR airtable.com OR paypal.com OR wolt.com)"
     ),
     2: (
         'subject:(receipt OR invoice OR "payment confirmation" OR "billing statement" '

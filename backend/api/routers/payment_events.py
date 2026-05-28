@@ -12,7 +12,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from backend.db.setup import get_payment_events
+from fastapi import Body, HTTPException
+from backend.db.setup import get_payment_events, link_payment_event, unlink_payment_event
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +65,37 @@ def list_payment_events(
         limit=limit,
     )
     return [dict(row) for row in rows]
+
+
+@router.post("/{event_id}/link")
+def link_event_to_subscription(
+    event_id: str,
+    subscription_id: str = Body(..., embed=True),
+    conn: sqlite3.Connection = Depends(_get_db),
+) -> dict[str, str]:
+    """Link a payment_event to a subscription_id (manual correction).
+
+    Useful when the scanner detected a charge but couldn't link it automatically.
+    Privacy-safe: operates only on structured IDs, no raw content involved.
+    """
+    found = link_payment_event(conn, event_id, subscription_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Payment event not found")
+    conn.commit()
+    return {"event_id": event_id, "subscription_id": subscription_id}
+
+
+@router.post("/{event_id}/unlink")
+def unlink_event_from_subscription(
+    event_id: str,
+    conn: sqlite3.Connection = Depends(_get_db),
+) -> dict[str, str | None]:
+    """Remove subscription link from a payment_event (manual correction).
+
+    Sets subscription_id = NULL — the event remains in the table as orphaned.
+    """
+    found = unlink_payment_event(conn, event_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Payment event not found")
+    conn.commit()
+    return {"event_id": event_id, "subscription_id": None}

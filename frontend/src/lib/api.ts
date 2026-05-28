@@ -1,4 +1,4 @@
-import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus, PaymentEvent } from "@/types/api";
+import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus, PaymentEvent, CreateSubscriptionRequest, UpdateSubscriptionRequest } from "@/types/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -65,4 +65,36 @@ export const api = {
     const qs = p.toString();
     return apiFetch<PaymentEvent[]>(`/api/payment-events${qs ? `?${qs}` : ""}`);
   },
+
+  // Phase 3.4: Manual CRUD for subscriptions
+  createSubscription: (req: CreateSubscriptionRequest) =>
+    apiFetch<Subscription>("/api/subscriptions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  updateSubscription: (id: string, req: UpdateSubscriptionRequest) =>
+    apiFetch<Subscription>(`/api/subscriptions/${encodeURIComponent(id)}/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    }),
+  deleteSubscription: (id: string) =>
+    fetch(`${BASE}/api/subscriptions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // Phase 3.4: Payment event link/unlink
+  linkPaymentEvent: (eventId: string, subscriptionId: string) =>
+    apiFetch<{ event_id: string; subscription_id: string }>(
+      `/api/payment-events/${encodeURIComponent(eventId)}/link`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription_id: subscriptionId }),
+      }
+    ),
+  unlinkPaymentEvent: (eventId: string) =>
+    apiFetch<{ event_id: string; subscription_id: null }>(
+      `/api/payment-events/${encodeURIComponent(eventId)}/unlink`,
+      { method: "POST" }
+    ),
 };

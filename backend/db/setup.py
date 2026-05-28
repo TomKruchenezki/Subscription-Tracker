@@ -182,6 +182,140 @@ def get_subscription_by_id(conn: sqlite3.Connection, subscription_id: str) -> sq
     ).fetchone()
 
 
+def create_subscription_manual(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    amount: float | None = None,
+    currency: str = "USD",
+    billing_cycle: str = "UNKNOWN",
+    category: str = "OTHER",
+    status: str = "ACTIVE",
+    source_provider: str = "MOCK",
+    service_url: str | None = None,
+) -> str:
+    """Insert a subscription created manually by the user. Returns subscription_id.
+
+    This is distinct from upsert_subscription() — it always creates a new record
+    without trying to merge with an existing subscription by name. Used by the
+    manual CRUD API endpoint (POST /api/subscriptions).
+    """
+    now = _now()
+    sub_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO subscriptions
+           (subscription_id, name, service_url, amount, currency, billing_cycle,
+            next_renewal, category, status, first_seen, last_seen, source_provider,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, COALESCE(?, 'USD'), ?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
+        (sub_id, name, service_url, amount, currency, billing_cycle,
+         category, status, now, now, source_provider, now, now),
+    )
+    return sub_id
+
+
+def update_subscription_fields(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    *,
+    name: str | None = None,
+    amount: float | None = None,
+    currency: str | None = None,
+    billing_cycle: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    service_url: str | None = None,
+) -> bool:
+    """Update specific fields on a subscription. Returns True if row was found.
+
+    Only non-None arguments are updated. Used by POST /api/subscriptions/{id}/update.
+    Allows users to correct amount, currency, cycle, status, or name.
+    """
+    row = conn.execute(
+        "SELECT subscription_id FROM subscriptions WHERE subscription_id = ?",
+        (subscription_id,),
+    ).fetchone()
+    if not row:
+        return False
+
+    now = _now()
+    fields: list[str] = []
+    params: list = []
+    if name is not None:
+        fields.append("name = ?"); params.append(name)
+    if amount is not None:
+        fields.append("amount = ?"); params.append(amount)
+    if currency is not None:
+        fields.append("currency = ?"); params.append(currency)
+    if billing_cycle is not None:
+        fields.append("billing_cycle = ?"); params.append(billing_cycle)
+    if status is not None:
+        fields.append("status = ?"); params.append(status)
+    if category is not None:
+        fields.append("category = ?"); params.append(category)
+    if service_url is not None:
+        fields.append("service_url = ?"); params.append(service_url)
+    if not fields:
+        return True  # nothing to update
+    fields.append("updated_at = ?"); params.append(now)
+    params.append(subscription_id)
+    conn.execute(
+        f"UPDATE subscriptions SET {', '.join(fields)} WHERE subscription_id = ?", params
+    )
+    return True
+
+
+def delete_subscription(conn: sqlite3.Connection, subscription_id: str) -> bool:
+    """Delete a subscription by ID. Returns True if it existed.
+
+    payment_events.subscription_id is SET NULL on delete (FK ON DELETE SET NULL).
+    email_records.subscription_id is CASCADE-deleted (FK ON DELETE CASCADE).
+    Used by DELETE /api/subscriptions/{id} for manual false-positive removal.
+    """
+    row = conn.execute(
+        "SELECT subscription_id FROM subscriptions WHERE subscription_id = ?",
+        (subscription_id,),
+    ).fetchone()
+    if not row:
+        return False
+    conn.execute(
+        "DELETE FROM subscriptions WHERE subscription_id = ?", (subscription_id,)
+    )
+    return True
+
+
+def link_payment_event(
+    conn: sqlite3.Connection,
+    event_id: str,
+    subscription_id: str,
+) -> bool:
+    """Set subscription_id on a payment_event. Returns True if event found."""
+    row = conn.execute(
+        "SELECT event_id FROM payment_events WHERE event_id = ?", (event_id,)
+    ).fetchone()
+    if not row:
+        return False
+    conn.execute(
+        "UPDATE payment_events SET subscription_id = ? WHERE event_id = ?",
+        (subscription_id, event_id),
+    )
+    return True
+
+
+def unlink_payment_event(conn: sqlite3.Connection, event_id: str) -> bool:
+    """Set subscription_id = NULL on a payment_event. Returns True if event found."""
+    row = conn.execute(
+        "SELECT event_id FROM payment_events WHERE event_id = ?", (event_id,)
+    ).fetchone()
+    if not row:
+        return False
+    conn.execute(
+        "UPDATE payment_events SET subscription_id = NULL WHERE event_id = ?",
+        (event_id,),
+    )
+    return True
+
+
 # ── Email records ────────────────────────────────────────────────────────────
 
 def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
@@ -303,6 +437,14 @@ def get_summary(conn: sqlite3.Connection, source_provider: str | None = None) ->
     top_currency = currency_rows[0]["currency"] if currency_rows else "USD"
     top_total = currency_rows[0]["monthly_total"] if currency_rows else (active["monthly"] or 0.0)
 
+    # Count UNKNOWN-status subscriptions (detected but amount/cycle not yet confirmed).
+    # Used by the dashboard to show "N unconfirmed subscriptions" instead of "$0.00"
+    # when no ACTIVE subscriptions exist.
+    unconfirmed_count = conn.execute(
+        f"SELECT COUNT(*) as cnt FROM subscriptions WHERE status = 'UNKNOWN'{sp_clause}",
+        sp_params,
+    ).fetchone()["cnt"]
+
     return {
         "total_monthly_cost": round(top_total or 0.0, 2),
         "currency": top_currency,
@@ -311,6 +453,7 @@ def get_summary(conn: sqlite3.Connection, source_provider: str | None = None) ->
         "flagged_count": flagged_count,
         "has_mock_data": has_mock_data,
         "monthly_costs_by_currency": monthly_costs_by_currency,
+        "unconfirmed_count": unconfirmed_count,
     }
 
 
@@ -440,23 +583,27 @@ def insert_payment_event(
     is_one_time_candidate: int,
     subscription_id: str | None,
     confidence_score: float,
+    needs_attachment_review: int = 0,
 ) -> None:
     """Insert a payment event. INSERT OR IGNORE on event_id — safe for re-scans.
 
     Privacy: stores NO raw email content. merchant_name is the canonical name from
     sender_list.py (e.g. 'Spotify'), never the raw sender address or email subject.
+
+    needs_attachment_review=1 when: amount is NULL + Tier 1 sender + financial pattern.
+    Signals that the charge amount is likely in an attached PDF/invoice (Phase 3.5 queue).
     """
     conn.execute(
         """INSERT OR IGNORE INTO payment_events
            (event_id, source_message_id, source_provider, source_account_id,
             event_type, amount, currency, merchant_name, event_date,
             is_recurring_candidate, is_one_time_candidate,
-            subscription_id, confidence_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            subscription_id, confidence_score, needs_attachment_review)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (event_id, source_message_id, source_provider, source_account_id,
          event_type, amount, currency, merchant_name, event_date,
          is_recurring_candidate, is_one_time_candidate,
-         subscription_id, confidence_score),
+         subscription_id, confidence_score, needs_attachment_review),
     )
 
 

@@ -5,7 +5,7 @@ by reading Gmail metadata only (sender, subject, date — never body). All data 
 a local SQLite file. No cloud sync, no bank access, no telemetry.
 
 **Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 3.3B complete — payment event semantics, native currency (₪/$), GET /api/payment-events, frontend PaymentEventsTable. See `docs/CURRENT_STATE.md`.
+**Current phase:** Phase 3.4 complete — provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom date range, attachment review flag. See `docs/CURRENT_STATE.md`.
 
 ---
 
@@ -69,9 +69,9 @@ Both approvals are required for any new `email_records` or `subscriptions` colum
 | 3.0 | HTML body extraction fixes | **Complete** |
 | 3.1 | payment_events + native currency + subscription linking | **Complete** |
 | 3.3B | payment_events semantics + GET /api/payment-events + frontend PaymentEventsTable + billing cycle fix | **Complete** |
-| 3.2 | Provider-specific parsers | Next |
-| 3.3 | Attachment/PDF parsing | Planned |
-| Future | AI parsing, bank integration | Not planned |
+| 3.4 | Provider expansion (Wolt+, Apple Music disambiguation), manual CRUD, review queue UX, custom scan range, needs_attachment_review flag | **Complete** |
+| 3.5 | PDF/attachment amount extraction, reprocessing mode, user corrections table | Next |
+| Future | AI parsing, bank integration, Outlook/IMAP | Not planned |
 
 **When a phase completes:** Update the Status column above and the **Current phase**
 line at the top of this file. Also update `docs/CURRENT_STATE.md` with the new test

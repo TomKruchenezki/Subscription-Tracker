@@ -1,7 +1,7 @@
 # Subscription Tracker — Current State
 
 **Last updated:** 2026-05-28  
-**Phase:** Phase 3.3B complete — payment event semantics, native currency display, GET /api/payment-events, frontend PaymentEventsTable, billing cycle body_text restriction
+**Phase:** Phase 3.4 complete — provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom scan range, needs_attachment_review flag
 
 ---
 
@@ -29,6 +29,20 @@
   - Subscription linking — `payment_events.subscription_id` foreign key to `subscriptions`
   - One-time payment detection — `is_one_time_candidate` / `is_recurring_candidate` flags
   - Refund and cancellation event types (`refund`, `cancellation`, `unknown_payment`)
+- **Phase 3.4 features** (complete, 2026-05-28):
+  - **Wolt/Wolt+ Tier 1**: wolt.com, mail.wolt.com, wolt.fi, wolt.de, wolt.at, wolt.il added to TIER_1 in sender_list.py. wolt.com added to Gmail Pass 1 domain filter — Wolt+ now detected in quick/deep mode (not only forensic).
+  - **Apple product disambiguation**: `resolve_sender()` in sender_resolver.py now accepts `subject` parameter. Apple sender + "Apple Music" in subject → "Apple Music"; "iCloud" → "iCloud+"; "App Store" → "App Store"; "iTunes" → "Apple Music"; "Apple TV+" → "Apple TV+"; "Apple One" → "Apple One". detector.py always calls `resolve_sender(sender, subject)` for accurate product names.
+  - **needs_attachment_review flag**: migration 008 adds this column to payment_events. Set to 1 when tier=1 + RECEIPT/RENEWAL pattern + amount=None. Marks events where charge is real but amount is in an attached PDF (Phase 3.5 queue). Visible in PaymentEventsTable as 📎 indicator.
+  - **Manual subscription CRUD**: `POST /api/subscriptions` (create, 201), `POST /api/subscriptions/{id}/update` (update via POST not PUT — CORS allows GET/POST/DELETE only), `DELETE /api/subscriptions/{id}` (204). DB functions: `create_subscription_manual()`, `update_subscription_fields()`, `delete_subscription()`.
+  - **Payment event link/unlink**: `POST /api/payment-events/{id}/link` (body: `{"subscription_id": "..."}`) and `POST /api/payment-events/{id}/unlink`. DB functions: `link_payment_event()`, `unlink_payment_event()`.
+  - **unconfirmed_count in summary**: `get_summary()` now returns `unconfirmed_count` (count of UNKNOWN-status subscriptions). SpendingSummary shows "—" instead of "$0.00" when all subs are UNKNOWN, with "N unconfirmed subscriptions" subtext.
+  - **SubscriptionTable redesign**: Two sections — "Active subscriptions" (ACTIVE/TRIAL) and "Unconfirmed candidates" (UNKNOWN/PAUSED). Each row has ✏️ Edit and 🗑️ Delete buttons. "+ Add subscription" creates a new subscription manually. Inline edit form (EditRow) with all editable fields. Cancelled shown in a collapsed `<details>` section.
+  - **ReviewQueue redesign**: FLAGGED email_records now grouped by event_type into 5 categories: Subscription candidates / Unknown payments / Refunds / Cancellations / Trials. Each row has "✓ Confirm" (opens modal pre-filled from record data → creates subscription) and "✕ Dismiss" (hides from view, local state only). Amount display bug fixed: `${currency}${amount}` → `formatCurrency()`.
+  - **PaymentEventsTable redesign**: Link/Unlink actions per row. 📎 indicator for needs_attachment_review=1 events. Attachment count summary banner.
+  - **Custom scan date range**: SpendingSummary now includes "Custom range…" option in the scan range dropdown. When selected, shows From/To date inputs. page.tsx passes `date_from`/`date_to` to the scan API (backend already supports these parameters).
+  - **validation_report.py**: New "Known Provider Coverage" section (checks Spotify, Netflix, Wolt+, etc. in DB), "Unconfirmed Subscriptions Detail" section (lists UNKNOWN-status subs), "Attachment Review Queue" section (events with needs_attachment_review=1). Enhanced UI Visibility Checklist with Phase 3.4 checks (manual CRUD, SubscriptionTable sections, Wolt in Tier 1).
+  - **subscription-recall-reviewer agent**: New `.claude/agents/subscription-recall-reviewer.md` focused on false-negative risk assessment.
+  - **README.md**: Full rewrite covering current architecture, all features, API reference, scan modes, manual corrections guide, provider coverage table, and known limitations.
 - **Phase 3.3B fixes** (complete, 2026-05-28):
   - **payment_events semantics**: `_map_payment_event_type()` now derives from email_record event_type (which carries full context: was_created, tier, disposition), not from PatternType alone. Eliminates the old bug where PatternType.NONE → "unknown_payment" caused payment_events to mirror every email_record.
   - **`renewal_charge` event type**: RENEWAL receipts now correctly produce `event_type="renewal_charge"` (first receipt = "subscription_charge", subsequent = "renewal_charge"). Migration 007 adds `renewal_charge` to the CHECK constraint and drops the incorrect Phase 3.3 data.
@@ -55,22 +69,27 @@
 
 ## Known Problems
 
-- Google/Spotify/Zoom may show UNKNOWN until a forensic scan is run with Phase 3.3B fixes
+- Google/Spotify/Zoom may show UNKNOWN until a forensic scan is run with Phase 3.3B+3.4 fixes applied
 - Google canonical name is "Google" (not specific product e.g. "Google One")
 - Spotify plan variants ("Premium Student", "Family") not distinguished
 - Zoom "Payment Processed" billing cycle not detected (no cycle keyword in subject)
-- Subject-line-only amount extraction misses amounts buried in HTML body for some providers
-  (Phase 3.2 provider-specific parsers will address this)
-- A fresh forensic scan is required to repopulate `payment_events` with correct semantics
-  (migration 007 dropped the incorrect Phase 3.3 data)
+- Subject-line-only amount extraction misses amounts buried in HTML body for some providers → marked as needs_attachment_review=1 in payment_events (Phase 3.5 will extract these)
+- Wolt food delivery receipts (non-subscription one-time orders) may appear as Wolt+ candidates since they come from the same domain. User can delete false positives.
+- Review Queue "Dismiss" action is local-state only — dismissed records reappear on page refresh (no DB persistence for dismissals in Phase 3.4)
 
 ---
 
 ## Test Status
 
-- **475 passed, 1 skipped** (token file test — no `token.json` on disk)
+- **515 passed, 1 skipped** (token file test — no `token.json` on disk)
 - Privacy gate: **18 passed, 1 skipped** — all green
-- Phase 3.3B tests added (25 new tests):
+- Phase 3.4 tests added (40 new tests):
+  - `test_sender_list.py` — 5 new tests: Wolt Tier 1 coverage (wolt.com, mail.wolt.com, wolt.fi, wolt.de, wolt.il)
+  - `test_sender_resolver.py` — 13 new tests: Apple product disambiguation (Apple Music, iCloud+, App Store, iTunes, Apple TV+, Apple One, generic fallback), Wolt sender resolution
+  - `test_api_subscriptions.py` — NEW file, 13 tests: POST /api/subscriptions (create, 201, validation), POST /{id}/update (amount, status, cycle), DELETE /{id} (204, DB removal, 404)
+  - `test_detector.py` — 7 new tests: needs_attachment_review flag (Tier 1 no amount → 1, with amount → 0, Tier 0 → 0), Wolt+ detected, Apple Music subscription named correctly
+  - `test_api_payment_events.py` — 6 new tests: link/unlink endpoints (200, 404), needs_attachment_review field in response
+- Phase 3.3B tests (25 tests, still passing):
   - `test_cycle_detector.py` — 9 tests: body_text weak pattern suppression, Spotify regression
   - `test_detector.py` — 6 tests: payment event semantics, renewal_charge, NONE → no event, is_recurring_candidate
   - `test_database.py` — 5 tests: get_payment_events filtering, renewal_charge stored, no raw content
@@ -128,25 +147,59 @@ python scripts/validation_report.py
 | Confidence scoring | `backend/detector/confidence_scorer.py` |
 | Sender tier list | `backend/detector/sender_list.py` |
 | Pattern matching | `backend/detector/pattern_library.py` |
+| Sender resolver (w/ Apple) | `backend/parser/sender_resolver.py` |
 | Amount extraction | `backend/parser/amount_extractor.py` |
 | Cycle detection | `backend/parser/cycle_detector.py` |
-| Body fetch + strip | `backend/sources/gmail.py` (`_fetch_body`, `_extract_body_text`, `_strip_html`) |
+| Body fetch + strip | `backend/sources/gmail.py` |
 | DB schema/CRUD | `backend/db/setup.py` |
 | Migrations | `backend/db/migrations/00*.sql` |
-| Payment events (v1) | `backend/db/migrations/006_payment_events.sql` |
-| Payment events (v2) | `backend/db/migrations/007_payment_events_v2.sql` |
+| Payment events (v2 schema) | `backend/db/migrations/007_payment_events_v2.sql` |
+| Attachment review flag | `backend/db/migrations/008_needs_attachment_review.sql` |
+| Subscriptions API | `backend/api/routers/subscriptions.py` |
 | Payment events API | `backend/api/routers/payment_events.py` |
 | Currency formatting | `frontend/src/lib/format.ts` |
+| API client | `frontend/src/lib/api.ts` |
+| TypeScript types | `frontend/src/types/api.ts` |
+| Dashboard page | `frontend/src/app/page.tsx` |
+| Review Queue page | `frontend/src/app/review/page.tsx` |
+| Spending summary + scan controls | `frontend/src/components/SpendingSummary.tsx` |
+| Subscription table (w/ CRUD) | `frontend/src/components/SubscriptionTable.tsx` |
+| Review queue (w/ categories) | `frontend/src/components/ReviewQueue.tsx` |
 | Payment events UI | `frontend/src/components/PaymentEventsTable.tsx` |
 | Scan router | `backend/api/routers/scan.py`, `scan_async.py` |
 | Validation script | `scripts/validation_report.py` |
 
 ---
 
+## Verification Commands
+
+```bash
+# Privacy gate — run before any commit; must always be 100%
+python -m pytest tests/privacy/ -v
+
+# Full suite — run once after all code changes are complete
+python -m pytest tests/ -q
+
+# Targeted tests — run while iterating on a single module
+python -m pytest tests/unit/test_<module>.py -q
+
+# TypeScript check (run after any .ts/.tsx file changes)
+cd frontend && npx tsc --noEmit
+
+# Validation report against live DB
+python scripts/validation_report.py
+```
+
 ## Next Planned Phase
 
-**Phase 3.2** — Provider-specific parsers  
-Target: improve amount extraction for providers whose billing amounts appear only in HTML body (Google One, Zoom, etc.), not in subject lines.  
-See `docs/NEXT_STEPS.md` for the full roadmap.
+**Phase 3.5** — PDF/attachment amount extraction, reprocessing mode, user corrections table
 
-**Before Phase 3.2**: run a forensic scan (2y range) to verify Phase 3.3B fixes produce correct payment_events semantics and the dashboard shows ₪ symbols correctly.
+Target: extract amounts from payment_events where `needs_attachment_review=1`. These are Tier 1 events where the charge is confirmed but amount is in an attached PDF or HTML body.
+
+Before starting Phase 3.5: run a forensic scan (2y range) with Phase 3.4 fixes applied. Verify:
+- Wolt+ appears in results (recall test)
+- Apple Music shows separately from generic "Apple" (disambiguation test)
+- SubscriptionTable shows Active vs Unconfirmed sections
+- Review Queue is categorized (not a flat list)
+- Custom date range picker appears in scan controls
+- Known Provider Coverage section in validation_report shows expected providers

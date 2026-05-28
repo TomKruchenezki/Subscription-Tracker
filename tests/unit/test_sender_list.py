@@ -105,3 +105,40 @@ def test_subdomain_of_tier1_matches():
     tier, name = get_tier("billing.account.netflix.com")
     assert tier == 1
     assert name == "Netflix"
+
+
+# ── Phase 3.4: Wolt/Wolt+ coverage ───────────────────────────────────────────
+
+def test_wolt_com_is_tier1():
+    """wolt.com must be Tier 1 — Wolt+ subscription emails come from this domain."""
+    tier, name = get_tier("wolt.com")
+    assert tier == 1, f"wolt.com must be Tier 1, got {tier}"
+    assert name == "Wolt+", f"wolt.com canonical name must be 'Wolt+', got {name!r}"
+
+
+def test_wolt_mail_subdomain_is_tier1():
+    """mail.wolt.com must be Tier 1 (Wolt sends from this subdomain)."""
+    tier, name = get_tier("mail.wolt.com")
+    assert tier == 1, f"mail.wolt.com must be Tier 1, got {tier}"
+    assert name == "Wolt+", f"mail.wolt.com canonical name must be 'Wolt+', got {name!r}"
+
+
+def test_wolt_fi_is_tier1():
+    """wolt.fi (Finnish market) must be Tier 1."""
+    tier, name = get_tier("wolt.fi")
+    assert tier == 1, f"wolt.fi must be Tier 1, got {tier}"
+    assert name == "Wolt+", f"wolt.fi canonical name must be 'Wolt+', got {name!r}"
+
+
+def test_wolt_de_is_tier1():
+    """wolt.de (German market) must be Tier 1."""
+    tier, name = get_tier("wolt.de")
+    assert tier == 1, f"wolt.de must be Tier 1, got {tier}"
+    assert name == "Wolt+", f"wolt.de canonical name must be 'Wolt+', got {name!r}"
+
+
+def test_wolt_il_is_tier1():
+    """wolt.il (Israeli market) must be Tier 1."""
+    tier, name = get_tier("wolt.il")
+    assert tier == 1, f"wolt.il must be Tier 1, got {tier}"
+    assert name == "Wolt+", f"wolt.il canonical name must be 'Wolt+', got {name!r}"

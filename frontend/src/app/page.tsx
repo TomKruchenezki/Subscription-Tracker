@@ -8,7 +8,7 @@ import type { Subscription, Summary, ScanMode, ScanRange, ScanResult, ScanJobSta
 
 interface LastScan extends ScanResult {
   mode: ScanMode;
-  scan_range: ScanRange;
+  scan_range: ScanRange | string;
 }
 
 export default function DashboardPage() {
@@ -23,6 +23,15 @@ export default function DashboardPage() {
   const [scanMode, setScanMode] = useState<ScanMode>("quick");
   const [scanRange, setScanRange] = useState<ScanRange>("1m");
   const [lastScan, setLastScan] = useState<LastScan | null>(null);
+
+  // Phase 3.4: custom date range
+  const today = new Date().toISOString().slice(0, 10);
+  const [customDateFrom, setCustomDateFrom] = useState<string>(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [customDateTo, setCustomDateTo] = useState<string>(today);
 
   // Background scan progress (forensic mode only)
   const [scanProgress, setScanProgress] = useState<ScanJobStatus | null>(null);
@@ -68,9 +77,13 @@ export default function DashboardPage() {
     setError(null);
 
     try {
+      const scanRequest = scanRange === "custom"
+        ? { mode: scanMode, date_from: customDateFrom, date_to: customDateTo }
+        : { mode: scanMode, scan_range: scanRange };
+
       if (scanMode === "forensic") {
         // ── Background scan: start + poll ──────────────────────────────────
-        const job = await api.scanStart({ mode: scanMode, scan_range: scanRange });
+        const job = await api.scanStart(scanRequest);
         setScanProgress(job);
 
         pollRef.current = setInterval(async () => {
@@ -89,7 +102,7 @@ export default function DashboardPage() {
                   flagged: status.flagged_count,
                   ignored: status.ignored_count,
                   mode: scanMode,
-                  scan_range: scanRange,
+                  scan_range: scanRange === "custom" ? "custom" : scanRange,
                 });
                 await loadData();
               } else {
@@ -107,8 +120,8 @@ export default function DashboardPage() {
 
       } else {
         // ── Synchronous scan: quick / deep ─────────────────────────────────
-        const result = await api.scan({ mode: scanMode, scan_range: scanRange });
-        setLastScan({ ...result, mode: scanMode, scan_range: scanRange });
+        const result = await api.scan(scanRequest);
+        setLastScan({ ...result, mode: scanMode, scan_range: scanRange === "custom" ? "custom" : scanRange });
         await loadData();
         setScanning(false);
       }
@@ -168,6 +181,10 @@ export default function DashboardPage() {
           onScanModeChange={setScanMode}
           scanRange={scanRange}
           onScanRangeChange={setScanRange}
+          customDateFrom={customDateFrom}
+          customDateTo={customDateTo}
+          onCustomDateFromChange={setCustomDateFrom}
+          onCustomDateToChange={setCustomDateTo}
           scanProgress={scanProgress}
         />
       )}
@@ -202,8 +219,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
-        <SubscriptionTable subscriptions={subscriptions} />
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "16px", overflow: "hidden" }}>
+        <SubscriptionTable subscriptions={subscriptions} onRefresh={loadData} />
       </div>
 
       {/* Payment Events — financial event log (Phase 3.3B) */}
@@ -216,8 +233,8 @@ export default function DashboardPage() {
             </span>
           )}
         </h2>
-        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden", padding: "0 16px" }}>
-          <PaymentEventsTable events={paymentEvents} />
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden", padding: "16px" }}>
+          <PaymentEventsTable events={paymentEvents} onRefresh={loadData} />
         </div>
       </div>
     </>

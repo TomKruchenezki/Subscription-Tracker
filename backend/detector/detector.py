@@ -188,10 +188,17 @@ def process_email(
     amount = parsed["amount"]
     currency = parsed["currency"]    # None when not extracted — preserves native currency (e.g. ILS)
     billing_cycle = parsed["billing_cycle"]
-    canonical_name = parsed["canonical_name"] or canonical_name_from_tier or "Unknown"
-
-    if canonical_name_from_tier:
-        canonical_name = canonical_name_from_tier
+    # Apple product disambiguation: resolve_sender uses subject to refine "Apple" →
+    # "Apple Music", "iCloud+", "App Store", etc. The subject is passed here only
+    # for this lookup — it is not stored in payment_events or subscriptions.
+    # Always call with subject so product-specific names are used (parse_email calls
+    # resolve_sender without subject, so we re-resolve here to pick up subject refinement).
+    from backend.parser.sender_resolver import resolve_sender as _resolve
+    canonical_name = (
+        _resolve(email.sender_address, email.subject)
+        or canonical_name_from_tier
+        or "Unknown"
+    )
 
     # Stage 4: Confidence scoring
     score = compute_score(tier, pattern, amount, billing_cycle)
@@ -321,6 +328,14 @@ def process_email(
                 pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
                 and amount is not None
             )
+            # needs_attachment_review: Tier 1 + financial pattern + no extractable amount.
+            # The charge is real but the amount is likely in an attached PDF/invoice.
+            # Flags this event for the Phase 3.5 attachment-parsing queue.
+            needs_attachment = int(
+                tier == 1
+                and amount is None
+                and pattern in _STRONG_BILLING_PATTERNS
+            )
             insert_payment_event(
                 conn,
                 event_id=pe_id,
@@ -336,6 +351,7 @@ def process_email(
                 is_one_time_candidate=is_one_time,
                 subscription_id=subscription_id,
                 confidence_score=score,
+                needs_attachment_review=needs_attachment,
             )
         conn.commit()
 

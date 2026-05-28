@@ -10,6 +10,11 @@ interface Props {
   onScanModeChange: (m: ScanMode) => void;
   scanRange: ScanRange;
   onScanRangeChange: (r: ScanRange) => void;
+  // Phase 3.4: custom date range
+  customDateFrom: string;
+  customDateTo: string;
+  onCustomDateFromChange: (d: string) => void;
+  onCustomDateToChange: (d: string) => void;
   scanProgress?: ScanJobStatus | null;
 }
 
@@ -31,22 +36,31 @@ export function SpendingSummary({
   onScanModeChange,
   scanRange,
   onScanRangeChange,
+  customDateFrom,
+  customDateTo,
+  onCustomDateFromChange,
+  onCustomDateToChange,
   scanProgress,
 }: Props) {
+  // When total_monthly_cost is 0 but there are unconfirmed subscriptions, show "—"
+  const allUnconfirmed = summary.total_monthly_cost === 0 && (summary.unconfirmed_count ?? 0) > 0;
+  const costValue = allUnconfirmed ? "—" : formatCurrency(summary.total_monthly_cost, summary.currency);
+
+  const costSubValue = allUnconfirmed
+    ? `${summary.unconfirmed_count} unconfirmed subscription${summary.unconfirmed_count !== 1 ? "s" : ""}`
+    : summary.monthly_costs_by_currency && Object.keys(summary.monthly_costs_by_currency).length > 1
+      ? Object.entries(summary.monthly_costs_by_currency)
+          .map(([c, v]) => formatMonthly(v, c))
+          .join(" · ")
+      : undefined;
+
   return (
     <div style={{ display: "flex", gap: "16px", marginBottom: "24px", flexWrap: "wrap" }}>
       <StatCard
         label="Est. monthly cost"
-        value={formatCurrency(summary.total_monthly_cost, summary.currency)}
-        subValue={
-          summary.monthly_costs_by_currency &&
-          Object.keys(summary.monthly_costs_by_currency).length > 1
-            ? Object.entries(summary.monthly_costs_by_currency)
-                .map(([c, v]) => formatMonthly(v, c))
-                .join(" · ")
-            : undefined
-        }
-        color="var(--accent)"
+        value={costValue}
+        subValue={costSubValue}
+        color={allUnconfirmed ? "var(--muted)" : "var(--accent)"}
       />
       <StatCard label="Active subscriptions" value={summary.active_count.toString()} />
       <StatCard label="Emails detected" value={summary.detected_count.toString()} />
@@ -78,7 +92,29 @@ export function SpendingSummary({
             <option value="1y">1 year</option>
             <option value="2y">2 years</option>
             <option value="5y">5 years</option>
+            <option value="custom">Custom range…</option>
           </select>
+          {scanRange === "custom" && (
+            <>
+              <input
+                type="date"
+                value={customDateFrom}
+                onChange={(e) => onCustomDateFromChange(e.target.value)}
+                disabled={scanning}
+                style={{ ...SELECT_STYLE, cursor: scanning ? "not-allowed" : "pointer" }}
+                aria-label="From date"
+              />
+              <span style={{ color: "var(--muted)", fontSize: "12px" }}>→</span>
+              <input
+                type="date"
+                value={customDateTo}
+                onChange={(e) => onCustomDateToChange(e.target.value)}
+                disabled={scanning}
+                style={{ ...SELECT_STYLE, cursor: scanning ? "not-allowed" : "pointer" }}
+                aria-label="To date"
+              />
+            </>
+          )}
           <button className="primary" onClick={onScan} disabled={scanning}>
             {scanning ? "Scanning…" : "Run scan"}
           </button>

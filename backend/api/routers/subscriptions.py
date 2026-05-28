@@ -1,7 +1,12 @@
 import os
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from backend.api.routers._db import get_conn
-from backend.db.setup import get_subscriptions, get_subscription_by_id, get_email_records, get_records_for_subscription
+from backend.db.setup import (
+    get_subscriptions, get_subscription_by_id, get_email_records,
+    get_records_for_subscription,
+    create_subscription_manual, update_subscription_fields, delete_subscription,
+)
 from backend.models.subscription import SubscriptionResponse, EmailRecordResponse
 from datetime import datetime
 
@@ -99,3 +104,79 @@ def list_email_records(disposition: str | None = Query(None)):
         rows = get_email_records(conn, disposition=disposition,
                                  source_provider=_source_provider_filter())
     return [EmailRecordResponse(**_row_to_record(r)) for r in rows]
+
+
+# ── Manual CRUD ───────────────────────────────────────────────────────────────
+
+class CreateSubscriptionRequest(BaseModel):
+    name: str
+    amount: float | None = None
+    currency: str = "USD"
+    billing_cycle: str = "UNKNOWN"
+    category: str = "OTHER"
+    status: str = "ACTIVE"
+    service_url: str | None = None
+
+
+class UpdateSubscriptionRequest(BaseModel):
+    name: str | None = None
+    amount: float | None = None
+    currency: str | None = None
+    billing_cycle: str | None = None
+    status: str | None = None
+    category: str | None = None
+    service_url: str | None = None
+
+
+@router.post("/api/subscriptions", status_code=201)
+def create_subscription(body: CreateSubscriptionRequest):
+    """Manually create a subscription. Used when the scanner missed a real subscription."""
+    import os as _os
+    source_provider = "GMAIL" if _os.getenv("USE_MOCK", "true").lower() in {"false", "0", "no"} else "MOCK"
+    with get_conn() as conn:
+        sub_id = create_subscription_manual(
+            conn,
+            name=body.name,
+            amount=body.amount,
+            currency=body.currency,
+            billing_cycle=body.billing_cycle,
+            category=body.category,
+            status=body.status,
+            service_url=body.service_url,
+            source_provider=source_provider,
+        )
+        conn.commit()
+        row = get_subscription_by_id(conn, sub_id)
+    return SubscriptionResponse(**_row_to_subscription(row))
+
+
+@router.post("/api/subscriptions/{subscription_id}/update")
+def update_subscription(subscription_id: str, body: UpdateSubscriptionRequest):
+    """Update editable fields on a subscription (amount, currency, cycle, status, name)."""
+    with get_conn() as conn:
+        found = update_subscription_fields(
+            conn,
+            subscription_id,
+            name=body.name,
+            amount=body.amount,
+            currency=body.currency,
+            billing_cycle=body.billing_cycle,
+            status=body.status,
+            category=body.category,
+            service_url=body.service_url,
+        )
+        if not found:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        conn.commit()
+        row = get_subscription_by_id(conn, subscription_id)
+    return SubscriptionResponse(**_row_to_subscription(row))
+
+
+@router.delete("/api/subscriptions/{subscription_id}", status_code=204)
+def delete_subscription_endpoint(subscription_id: str):
+    """Delete a subscription (manual false-positive removal). Payment events are unlinked."""
+    with get_conn() as conn:
+        found = delete_subscription(conn, subscription_id)
+        if not found:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        conn.commit()
