@@ -426,7 +426,7 @@ def _build_query(
 # These are module-level so test_no_body_fetch.py can verify that format="full"
 # appears only in _fetch_body() (a GmailEmailSource method), not in these helpers.
 
-def _extract_body_text(payload: dict, max_chars: int = 2000) -> str | None:
+def _extract_body_text(payload: dict, max_chars: int = 5000) -> str | None:
     """Walk MIME parts to extract plain text from a Gmail format='full' payload.
 
     Prefers text/plain; strips text/html as fallback. Binary parts and attachments
@@ -480,17 +480,37 @@ def _b64_decode(data: str) -> str:
 
 
 def _strip_html(raw: str) -> str:
-    """Strip HTML tags using stdlib html.parser. Safe for malformed HTML."""
+    """Strip HTML tags using stdlib html.parser. Safe for malformed HTML.
+
+    Skips <style>, <script>, and <head> tag content entirely — these contain
+    CSS numbers and JavaScript code that would pollute the extracted text and
+    push billing amounts past the max_chars truncation limit.
+    Normalises whitespace: only non-empty stripped tokens are joined.
+    """
     import html as _html
     from html.parser import HTMLParser
 
     class _Strip(HTMLParser):
+        _SKIP = frozenset({"style", "script", "head"})
+
         def __init__(self) -> None:
             super().__init__()
             self._parts: list[str] = []
+            self._skip_depth: int = 0
+
+        def handle_starttag(self, tag: str, attrs) -> None:
+            if tag.lower() in self._SKIP:
+                self._skip_depth += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() in self._SKIP:
+                self._skip_depth = max(0, self._skip_depth - 1)
 
         def handle_data(self, data: str) -> None:
-            self._parts.append(data)
+            if self._skip_depth == 0:
+                stripped = data.strip()
+                if stripped:
+                    self._parts.append(stripped)
 
     p = _Strip()
     p.feed(_html.unescape(raw))

@@ -71,7 +71,11 @@ _CURRENCY_MAP = {
 }
 
 _AMOUNT_RE = re.compile(
-    r"(?P<sym>[$€£¥₹₪])(?P<amount>\d{1,5}(?:\.\d{1,2})?)"
+    # Allow optional whitespace between symbol and digits — HTML billing emails frequently
+    # format amounts as separate elements: <span>$</span><span>12.90</span>, which after
+    # HTML stripping produces "$ 12.90". The K/M/B guard in _NON_MONETARY_PATTERNS fires
+    # before this regex, so "₪37K" is still correctly rejected.
+    r"(?P<sym>[$€£¥₹₪])\s*(?P<amount>\d{1,5}(?:\.\d{1,2})?)"
     r"|(?P<amount2>\d{1,5}(?:\.\d{1,2})?)\s*(?P<code>USD|EUR|GBP|CAD|AUD|JPY|INR|ILS)",
     re.IGNORECASE,
 )

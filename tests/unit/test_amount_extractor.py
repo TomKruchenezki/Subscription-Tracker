@@ -232,3 +232,34 @@ def test_k_in_snippet_does_not_block_subject_amount():
     )
     assert amount == pytest.approx(15.49)
     assert currency == "USD"
+
+
+# ── Phase 3.0: space-tolerant extraction (HTML-stripped billing emails) ────────
+
+def test_amount_with_space_between_symbol_and_digit():
+    """HTML-stripped billing emails often produce '$ 12.90' (span elements).
+    The relaxed _AMOUNT_RE must capture amounts with a single space."""
+    amount, currency = extract_amount("Total: $ 12.90")
+    assert amount == pytest.approx(12.90)
+    assert currency == "USD"
+
+
+def test_amount_with_multiple_spaces():
+    """Two spaces between currency symbol and digit must still extract correctly."""
+    amount, currency = extract_amount("Amount due:  $  2.99")
+    assert amount == pytest.approx(2.99)
+    assert currency == "USD"
+
+
+def test_ils_with_space():
+    """ILS symbol with a single space before the digits must extract."""
+    amount, currency = extract_amount("חיוב: ₪ 12.9")
+    assert amount == pytest.approx(12.9)
+    assert currency == "ILS"
+
+
+def test_space_does_not_defeat_k_guard():
+    """'$ 37K' must still be caught by the K/M/B guard even with a space after $."""
+    amount, currency = extract_amount("Salary $ 37K/month")
+    assert amount is None
+    assert currency is None

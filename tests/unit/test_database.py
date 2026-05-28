@@ -548,3 +548,39 @@ def test_get_summary_has_mock_data_flag(conn):
     assert summary_mock_mode["has_mock_data"] is False, (
         "has_mock_data must always be False when source_provider is None (mock mode)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.0: Migration 005 — QUARTERLY billing_cycle accepted
+# ---------------------------------------------------------------------------
+
+def test_quarterly_billing_cycle_accepted(tmp_path):
+    """After migration 005, QUARTERLY is a valid billing_cycle value.
+
+    Uses tmp_path + init_db() directly (not the conftest fixture) to ensure
+    the fresh DB has had ALL migrations applied including 005_quarterly_cycle.sql.
+    The conftest fixture also applies all migrations so conn-based tests would
+    work too, but this makes the dependency explicit.
+    """
+    db = str(tmp_path / "quarterly.db")
+    init_db(db)
+    c = get_connection(db)
+    try:
+        sub_id, was_created = upsert_subscription(
+            c, name="QuarterlyService", amount=29.99, currency="USD",
+            billing_cycle="QUARTERLY",
+            category="SAAS", status="ACTIVE", source_provider="MOCK",
+        )
+        c.commit()
+        assert was_created is True, "QuarterlyService should be a new subscription"
+        row = c.execute(
+            "SELECT billing_cycle FROM subscriptions WHERE subscription_id = ?",
+            (sub_id,),
+        ).fetchone()
+        assert row is not None, "Subscription with QUARTERLY billing_cycle must be persisted"
+        assert row["billing_cycle"] == "QUARTERLY", (
+            f"Expected billing_cycle='QUARTERLY', got {row['billing_cycle']!r}. "
+            "Migration 005 must add QUARTERLY to the valid_billing_cycle CHECK constraint."
+        )
+    finally:
+        c.close()

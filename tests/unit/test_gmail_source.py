@@ -263,3 +263,74 @@ def test_unknown_mode_falls_back_to_deep():
     src.fetch(mode="unknown_mode_xyz")  # must not raise
     list_calls = service.users.return_value.messages.return_value.list.call_args_list
     assert len(list_calls) == 4, "Unknown mode must fall back to deep (4 passes)"
+
+
+# ── Phase 3.0: HTML stripping improvements ────────────────────────────────────
+
+def test_strip_html_skips_style_content():
+    """CSS numbers inside <style> blocks must not appear in the extracted text."""
+    from backend.sources.gmail import _strip_html
+    html = "<style>.x { font-size: 14px; line-height: 24px; color: #333 }</style><p>Total: $12.90</p>"
+    result = _strip_html(html)
+    # CSS numbers (14, 24) must not appear in the result
+    assert "14" not in result, "CSS font-size value must be stripped by _strip_html"
+    assert "24" not in result, "CSS line-height value must be stripped by _strip_html"
+    # The billing amount must survive
+    assert "12.90" in result, "Billing amount in <p> must be present after stripping"
+
+
+def test_strip_html_skips_script_content():
+    """JavaScript inside <script> tags must not pollute the extracted text."""
+    from backend.sources.gmail import _strip_html
+    html = "<script>var price = 99.99; var tax = 0.20;</script><p>Your total: $12.90</p>"
+    result = _strip_html(html)
+    # JS numbers must not appear
+    assert "99.99" not in result, "JS variable value must be stripped by _strip_html"
+    assert "0.20" not in result, "JS tax value must be stripped by _strip_html"
+    # The billing amount must survive
+    assert "12.90" in result
+
+
+def test_extract_body_text_respects_5000_char_limit():
+    """Body text extraction must capture content up to 5000 chars — not truncate at 2000."""
+    import base64
+    from backend.sources.gmail import _extract_body_text
+
+    # Place a billing amount at character position 2500 — past the old 2000-char limit
+    padding = "x" * 2500
+    content = padding + " Total: $12.90 Thank you."
+    encoded = base64.urlsafe_b64encode(content.encode()).decode()
+    payload = {"mimeType": "text/plain", "body": {"data": encoded}}
+
+    result = _extract_body_text(payload)
+    assert result is not None, "_extract_body_text must return content for text/plain payload"
+    assert "12.90" in result, (
+        "Amount at char position 2500 must be captured (max_chars=5000, not 2000)"
+    )
+
+
+def test_body_amount_extracts_after_html_fix():
+    """Integration: amount only in HTML body_text (past 2000 chars) → correctly extracted.
+
+    Simulates a real billing email where:
+    - Subject: no amount
+    - body_text: HTML-stripped, amount appears at char ~2100 with a space after $
+    This tests Bugs A+B+C together end-to-end.
+    """
+    from datetime import datetime, timezone
+    from backend.parser.amount_extractor import extract_amount
+
+    # Simulate post-HTML-stripping body: lots of text, then "$ 15.49" (space after $)
+    body_text = "Header content " * 150 + " $ 15.49 Thank you for your subscription."
+    # Verify position: ~2250 chars of padding before the amount
+    assert len("Header content " * 150) > 2000, "Padding must exceed the old 2000-char limit"
+
+    amount, currency = extract_amount(
+        subject="Your subscription receipt",
+        snippet=None,
+        body_text=body_text,
+    )
+    assert amount == pytest.approx(15.49), (
+        "Amount at >2000 chars with space after $ symbol must be extracted"
+    )
+    assert currency == "USD"
