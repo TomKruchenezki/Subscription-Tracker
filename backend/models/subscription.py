@@ -57,3 +57,4 @@ class Summary(BaseModel):
     detected_count: int
     flagged_count: int
     has_mock_data: bool = False   # True only when USE_MOCK=false and MOCK rows exist in DB
+    monthly_costs_by_currency: dict[str, float] = {}   # per-currency monthly totals (Phase 3.3)

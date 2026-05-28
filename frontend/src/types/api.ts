@@ -76,6 +76,7 @@ export interface Summary {
   detected_count: number;
   flagged_count: number;
   has_mock_data?: boolean;  // present in Gmail mode; true when MOCK rows exist but are excluded
+  monthly_costs_by_currency?: Record<string, number>;  // Phase 3.3: per-currency monthly totals
 }
 
 export interface ScanJobStatus {

@@ -5,6 +5,7 @@ writes results to the database, and returns a DetectionResult.
 import logging
 import os
 import sqlite3
+import uuid as _uuid
 from dataclasses import dataclass
 
 from backend.models.email_metadata import EmailMetadata
@@ -17,6 +18,7 @@ from backend.db.setup import (
     update_subscription_status,
     update_subscription_lifecycle,
     insert_email_record,
+    insert_payment_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,29 @@ _PATTERN_TO_EVENT_TYPE: dict[PatternType, str | None] = {
 }
 
 
+def _map_to_payment_event_type(pattern: PatternType) -> str | None:
+    """Map a PatternType to a payment_events.event_type value.
+    Returns None for NOTIFICATION and PROMOTIONAL — those produce no payment event.
+    """
+    if pattern in (PatternType.RECEIPT, PatternType.RENEWAL):
+        return "subscription_charge"
+    if pattern == PatternType.REFUND:
+        return "refund"
+    if pattern == PatternType.CANCELLATION:
+        return "cancellation"
+    if pattern == PatternType.TRIAL_STARTED:
+        return "trial_started"
+    if pattern == PatternType.TRIAL_END:
+        return "trial_ended"
+    if pattern == PatternType.FAILED_PAYMENT:
+        return "failed_payment"
+    if pattern == PatternType.PRICE_CHANGE:
+        return "price_change"
+    if pattern == PatternType.NONE:
+        return "unknown_payment"
+    return None   # NOTIFICATION, PROMOTIONAL → no payment event
+
+
 @dataclass
 class DetectionResult:
     source_message_id: str
@@ -106,12 +131,13 @@ def _make_short_evidence(
     event_type: str | None,
     name: str,
     amount: float | None,
-    currency: str,
+    currency: str | None,
     billing_cycle: str,
 ) -> str | None:
     if not event_type:
         return None
-    amt = f"{currency} {amount:.2f}" if amount else ""
+    cur = currency or "USD"
+    amt = f"{cur} {amount:.2f}" if amount else ""
     cyc = f"/{billing_cycle.lower()}" if billing_cycle not in ("UNKNOWN", None) and amount else ""
     templates: dict[str, str | None] = {
         "subscription_started": f"New subscription: {amt}{cyc} from {name}",
@@ -153,7 +179,7 @@ def process_email(
     # Stage 3: Parser outputs
     parsed = parse_email_metadata(email)
     amount = parsed["amount"]
-    currency = parsed["currency"] or "USD"
+    currency = parsed["currency"]    # None when not extracted — preserves native currency (e.g. ILS)
     billing_cycle = parsed["billing_cycle"]
     canonical_name = parsed["canonical_name"] or canonical_name_from_tier or "Unknown"
 
@@ -272,6 +298,28 @@ def process_email(
             billing_period_end=None,
             short_evidence=short_evidence,
         )
+        # Phase 3.3: also write a payment_event for financial traceability
+        pe_event_type = _map_to_payment_event_type(pattern)
+        if pe_event_type is not None:
+            pe_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{email.source_message_id}:{pe_event_type}"))
+            insert_payment_event(
+                conn,
+                event_id=pe_id,
+                source_message_id=email.source_message_id,
+                source_provider=email.source_provider,
+                source_account_id=email.source_account_id,
+                event_type=pe_event_type,
+                amount=amount,
+                currency=currency,
+                merchant_name=canonical_name,
+                event_date=email_date_str,
+                is_recurring_candidate=1 if pattern in _STRONG_BILLING_PATTERNS else 0,
+                is_one_time_candidate=1 if (
+                    pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
+                ) else 0,
+                subscription_id=subscription_id,
+                confidence_score=score,
+            )
         conn.commit()
 
     elif disposition == "FLAGGED":
@@ -300,6 +348,28 @@ def process_email(
             billing_period_end=None,
             short_evidence=short_evidence,
         )
+        # Phase 3.3: write payment_event for FLAGGED financial signals too
+        pe_event_type = _map_to_payment_event_type(pattern)
+        if pe_event_type is not None:
+            pe_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{email.source_message_id}:{pe_event_type}"))
+            insert_payment_event(
+                conn,
+                event_id=pe_id,
+                source_message_id=email.source_message_id,
+                source_provider=email.source_provider,
+                source_account_id=email.source_account_id,
+                event_type=pe_event_type,
+                amount=amount,
+                currency=currency,
+                merchant_name=canonical_name,
+                event_date=email_date_str,
+                is_recurring_candidate=1 if pattern in _STRONG_BILLING_PATTERNS else 0,
+                is_one_time_candidate=1 if (
+                    pattern == PatternType.RECEIPT and tier == 0 and billing_cycle == "UNKNOWN"
+                ) else 0,
+                subscription_id=None,
+                confidence_score=score,
+            )
         conn.commit()
 
     # IGNORED: nothing stored

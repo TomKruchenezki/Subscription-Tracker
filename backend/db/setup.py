@@ -75,7 +75,7 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
         conn.execute(
             """UPDATE subscriptions
                SET amount = COALESCE(?, amount),
-                   currency = ?,
+                   currency = COALESCE(?, currency),
                    billing_cycle = CASE WHEN ? != 'UNKNOWN' THEN ? ELSE billing_cycle END,
                    category = ?,
                    status = ?,
@@ -92,7 +92,7 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
                (subscription_id, name, service_url, amount, currency, billing_cycle,
                 next_renewal, category, status, first_seen, last_seen, source_provider,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, COALESCE(?, 'USD'), ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (sub_id, name, service_url, amount, currency, billing_cycle,
              next_renewal, category, status, now, now, source_provider, now, now),
         )
@@ -289,13 +289,28 @@ def get_summary(conn: sqlite3.Connection, source_provider: str | None = None) ->
             ).fetchone()
         )
 
+    # Per-currency totals for ACTIVE subscriptions with known amount
+    currency_rows = conn.execute(
+        "SELECT currency, "
+        "SUM(CASE WHEN billing_cycle='ANNUAL' THEN amount/12.0 ELSE amount END) as monthly_total, "
+        "COUNT(*) as cnt "
+        f"FROM subscriptions WHERE status='ACTIVE' AND amount IS NOT NULL{sp_clause} "
+        "GROUP BY currency ORDER BY monthly_total DESC",
+        sp_params,
+    ).fetchall()
+    monthly_costs_by_currency = {r["currency"]: round(r["monthly_total"], 2) for r in currency_rows}
+    # Backwards-compat: expose the largest-value currency as top-level
+    top_currency = currency_rows[0]["currency"] if currency_rows else "USD"
+    top_total = currency_rows[0]["monthly_total"] if currency_rows else (active["monthly"] or 0.0)
+
     return {
-        "total_monthly_cost": round(active["monthly"] or 0.0, 2),
-        "currency": "USD",
+        "total_monthly_cost": round(top_total or 0.0, 2),
+        "currency": top_currency,
         "active_count": active["cnt"],
         "detected_count": detected_count,
         "flagged_count": flagged_count,
         "has_mock_data": has_mock_data,
+        "monthly_costs_by_currency": monthly_costs_by_currency,
     }
 
 
@@ -404,6 +419,73 @@ def get_running_scan_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return all scan jobs with status pending/collecting/processing."""
     return conn.execute(
         "SELECT * FROM scan_jobs WHERE status IN ('pending','collecting','processing')"
+    ).fetchall()
+
+
+# ── Payment events ────────────────────────────────────────────────────────────
+
+def insert_payment_event(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    source_message_id: str,
+    source_provider: str,
+    source_account_id: str,
+    event_type: str,
+    amount: float | None,
+    currency: str | None,
+    merchant_name: str,
+    event_date: str,
+    is_recurring_candidate: int,
+    is_one_time_candidate: int,
+    subscription_id: str | None,
+    confidence_score: float,
+) -> None:
+    """Insert a payment event. INSERT OR IGNORE on event_id — safe for re-scans.
+
+    Privacy: stores NO raw email content. merchant_name is the canonical name from
+    sender_list.py (e.g. 'Spotify'), never the raw sender address or email subject.
+    """
+    conn.execute(
+        """INSERT OR IGNORE INTO payment_events
+           (event_id, source_message_id, source_provider, source_account_id,
+            event_type, amount, currency, merchant_name, event_date,
+            is_recurring_candidate, is_one_time_candidate,
+            subscription_id, confidence_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (event_id, source_message_id, source_provider, source_account_id,
+         event_type, amount, currency, merchant_name, event_date,
+         is_recurring_candidate, is_one_time_candidate,
+         subscription_id, confidence_score),
+    )
+
+
+def get_payment_events(
+    conn: sqlite3.Connection,
+    source_message_id: str | None = None,
+    merchant_name: str | None = None,
+    subscription_id: str | None = None,
+    event_type: str | None = None,
+) -> list[sqlite3.Row]:
+    """Return payment events, optionally filtered by one or more fields."""
+    conditions = []
+    params: list = []
+    if source_message_id is not None:
+        conditions.append("source_message_id = ?")
+        params.append(source_message_id)
+    if merchant_name is not None:
+        conditions.append("merchant_name = ?")
+        params.append(merchant_name)
+    if subscription_id is not None:
+        conditions.append("subscription_id = ?")
+        params.append(subscription_id)
+    if event_type is not None:
+        conditions.append("event_type = ?")
+        params.append(event_type)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    return conn.execute(
+        f"SELECT * FROM payment_events {where} ORDER BY event_date DESC",
+        params,
     ).fetchall()
 
 

@@ -5,7 +5,7 @@ import pytest
 
 from backend.models.email_metadata import EmailMetadata
 from backend.detector.detector import process_email
-from backend.db.setup import get_subscriptions, get_email_records
+from backend.db.setup import get_subscriptions, get_email_records, get_payment_events
 
 
 def _make_email(message_id, sender, subject, date_str="2025-05-01T08:00:00Z"):
@@ -499,3 +499,112 @@ def test_mixed_hebrew_english_works(conn):
     subs = get_subscriptions(conn)
     assert len(subs) == 1
     assert subs[0]["amount"] == pytest.approx(12.90)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3: payment_events integration tests
+# ---------------------------------------------------------------------------
+
+def test_receipt_creates_payment_event(conn):
+    """Processing a RECEIPT email creates a payment_event row with event_type='subscription_charge'."""
+    email = _make_email(
+        "pe-t001",
+        "billing@account.netflix.com",
+        "Your Netflix membership receipt - $15.49",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED"
+
+    events = get_payment_events(conn, source_message_id="pe-t001")
+    assert len(events) == 1, (
+        f"A RECEIPT email must produce exactly 1 payment_event, got {len(events)}"
+    )
+    assert events[0]["event_type"] == "subscription_charge", (
+        f"RECEIPT pattern must map to 'subscription_charge', got {events[0]['event_type']!r}"
+    )
+    assert events[0]["merchant_name"] == "Netflix"
+    assert events[0]["confidence_score"] > 0.0
+
+
+def test_ils_currency_preserved_on_rescan(conn):
+    """Bug 2 regression: ILS currency set on first scan must not be overwritten by NULL on re-scan.
+
+    First email: Hebrew receipt with ₪12.90 → subscription created with currency='ILS'.
+    Second email: same service, no currency in subject → COALESCE must keep currency='ILS'.
+    """
+    # First scan: Hebrew receipt with ILS amount in snippet
+    first = _make_email_with_snippet(
+        "ils-preserve-001",
+        "billing@spotify.com",
+        "קבלה על תשלום",
+        snippet="חויבת ₪12.90 עבור Spotify Premium",
+    )
+    process_email(conn, first)
+
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["currency"] == "ILS", (
+        f"First scan must store currency='ILS', got {subs[0]['currency']!r}"
+    )
+
+    # Second scan: same service, subject has no currency signal (simulates no-symbol renewal)
+    second = _make_email(
+        "ils-preserve-002",
+        "billing@spotify.com",
+        "חידוש מנוי Spotify",  # no currency symbol
+    )
+    process_email(conn, second)
+
+    subs_after = get_subscriptions(conn)
+    spotify_subs = [s for s in subs_after if s["name"] == "Spotify"]
+    assert len(spotify_subs) == 1
+    assert spotify_subs[0]["currency"] == "ILS", (
+        f"currency must remain 'ILS' after re-scan with no currency in subject, "
+        f"got {spotify_subs[0]['currency']!r}. Bug 2 (COALESCE fix) must be in effect."
+    )
+
+
+def test_refund_creates_payment_event_not_subscription(conn):
+    """A REFUND email creates a payment_event with event_type='refund' but does NOT create a new subscription."""
+    email = _make_email(
+        "pe-refund-001",
+        "billing@account.netflix.com",
+        "We've issued a refund of $15.49 to your account",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"REFUND from Tier 1 sender should be DETECTED, got {result.disposition}"
+    )
+
+    # No new subscription should be created (no existing sub to link to)
+    subs = get_subscriptions(conn)
+    assert len(subs) == 0, (
+        f"A REFUND email must not create a new subscription, got {len(subs)} subscriptions"
+    )
+
+    # A payment_event with event_type='refund' should exist
+    events = get_payment_events(conn, source_message_id="pe-refund-001")
+    assert len(events) == 1, (
+        f"REFUND email must create exactly 1 payment_event, got {len(events)}"
+    )
+    assert events[0]["event_type"] == "refund", (
+        f"REFUND pattern must map to 'refund' payment_event, got {events[0]['event_type']!r}"
+    )
+
+
+def test_notification_creates_no_payment_event(conn):
+    """A NOTIFICATION email (e.g. security alert) must not create any payment_event."""
+    email = _make_email(
+        "pe-notif-001",
+        "no-reply@accounts.google.com",
+        "Security alert: new sign-in from a new device",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "IGNORED", (
+        f"NOTIFICATION should be IGNORED, got {result.disposition}"
+    )
+
+    events = get_payment_events(conn, source_message_id="pe-notif-001")
+    assert len(events) == 0, (
+        f"NOTIFICATION email must NOT create any payment_event, got {len(events)}"
+    )

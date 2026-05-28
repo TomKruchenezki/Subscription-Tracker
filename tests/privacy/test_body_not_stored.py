@@ -115,3 +115,33 @@ def test_scan_job_table_no_raw_content():
                     f"raw email content must never be stored in scan_jobs. "
                     f"Found in line: {line.strip()!r}"
                 )
+
+
+def test_payment_events_has_no_raw_content():
+    """payment_events migration SQL (006) must not include any raw email content columns.
+
+    The payment_events table is a privacy-safe financial event store.
+    Forbidden columns: subject, sender_address, snippet, body_text, body_html, short_evidence.
+    The source_message_id column is allowed — it is a traceability key only (opaque ID).
+    merchant_name is allowed — it is the canonical service name (e.g. 'Spotify'), never raw sender.
+    """
+    migration_path = Path("backend/db/migrations/006_payment_events.sql")
+    if not migration_path.exists():
+        pytest.skip("006_payment_events.sql not found")
+
+    sql = migration_path.read_text(encoding="utf-8").lower()
+
+    # These column names are forbidden in payment_events by privacy design
+    forbidden_columns = ["subject", "sender_address", "snippet", "body_text", "body_html", "short_evidence"]
+    for col in forbidden_columns:
+        lines = sql.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                continue  # skip comment lines
+            if col in stripped:
+                raise AssertionError(
+                    f"payment_events migration must not include column '{col}' — "
+                    f"raw email content must never be stored. "
+                    f"Found in line: {line.strip()!r}"
+                )

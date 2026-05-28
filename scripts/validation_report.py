@@ -414,6 +414,72 @@ def report(db_path: str, use_mock: bool) -> None:
     else:
         print("  (no ACTIVE GMAIL subscriptions)")
 
+    # ── Payment Events (Phase 3.3) ────────────────────────────────────────────
+    # Gracefully skip if the payment_events table doesn't exist (pre-migration DBs)
+    has_payment_events = bool(_run(conn,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='payment_events'"))
+
+    print(_header("Payment Events"))
+
+    if not has_payment_events:
+        print("  (payment_events table not found — run migration 006 first)")
+    else:
+        total_pe = _run(conn, "SELECT COUNT(*) FROM payment_events")[0][0]
+        print(f"  Total payment events: {total_pe}")
+
+        if total_pe > 0:
+            # Count by event_type
+            pe_by_type = _run(conn,
+                """SELECT event_type, COUNT(*) as cnt
+                   FROM payment_events
+                   GROUP BY event_type ORDER BY cnt DESC""")
+            print(f"\n  By event type:")
+            for row in pe_by_type:
+                print(f"    {row['event_type']:<22}  {row['cnt']}")
+
+            # Currency distribution (amount totals per currency, excluding NULL amounts)
+            pe_currency = _run(conn,
+                """SELECT currency, COUNT(*) as cnt,
+                          SUM(amount) as total_amount
+                   FROM payment_events
+                   WHERE amount IS NOT NULL AND currency IS NOT NULL
+                   GROUP BY currency ORDER BY total_amount DESC""")
+            if pe_currency:
+                print(f"\n  Currency distribution (events with known amount):")
+                for row in pe_currency:
+                    cur = row["currency"] or "?"
+                    total = row["total_amount"] or 0.0
+                    print(f"    {cur:<5}  {row['cnt']:>4} events,  total: {total:>9.2f}")
+
+            null_currency_count = _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE amount IS NULL OR currency IS NULL"
+            )[0][0]
+            if null_currency_count > 0:
+                print(f"    (+ {null_currency_count} events with no amount/currency extracted)")
+
+            # Recurring vs one-time breakdown
+            recurring = _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE is_recurring_candidate = 1")[0][0]
+            one_time  = _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE is_one_time_candidate = 1")[0][0]
+            ambiguous = total_pe - recurring - one_time + _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE is_recurring_candidate=1 AND is_one_time_candidate=1")[0][0]
+            print(f"\n  Recurring vs one-time flags:")
+            print(f"    is_recurring_candidate = 1:  {recurring}")
+            print(f"    is_one_time_candidate  = 1:  {one_time}")
+            ambiguous_count = total_pe - recurring - one_time
+            if ambiguous_count > 0:
+                print(f"    Neither flag set (lifecycle/ambiguous): {ambiguous_count}")
+
+            # Linked to subscription vs orphan
+            linked = _run(conn,
+                "SELECT COUNT(*) FROM payment_events WHERE subscription_id IS NOT NULL")[0][0]
+            orphan = total_pe - linked
+            print(f"\n  Linked to subscription:  {linked}")
+            print(f"  Orphaned (no sub link):  {orphan}")
+        else:
+            print("  (no payment events recorded yet — run a scan first)")
+
     # ── Duplicates ────────────────────────────────────────────────────────────
     print(_header("Duplicates"))
 

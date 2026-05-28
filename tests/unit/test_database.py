@@ -5,6 +5,7 @@ from backend.db.setup import (
     get_connection, upsert_subscription, insert_email_record,
     get_subscriptions, get_subscription_by_id, get_email_records,
     update_subscription_lifecycle, get_summary, init_db, create_scan_job,
+    insert_payment_event, get_payment_events,
 )
 
 
@@ -584,3 +585,142 @@ def test_quarterly_billing_cycle_accepted(tmp_path):
         )
     finally:
         c.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3: payment_events table tests
+# ---------------------------------------------------------------------------
+
+def _make_payment_event_kwargs(**overrides):
+    """Return a base set of kwargs for insert_payment_event with optional overrides."""
+    defaults = dict(
+        event_id="pe-test-001",
+        source_message_id="msg-test-001",
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        event_type="subscription_charge",
+        amount=9.99,
+        currency="USD",
+        merchant_name="Spotify",
+        event_date="2026-01-15T00:00:00Z",
+        is_recurring_candidate=1,
+        is_one_time_candidate=0,
+        subscription_id=None,
+        confidence_score=0.85,
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_insert_payment_event_basic(conn):
+    """insert_payment_event stores a row; get_payment_events retrieves it with correct fields."""
+    insert_payment_event(conn, **_make_payment_event_kwargs())
+    conn.commit()
+
+    events = get_payment_events(conn, source_message_id="msg-test-001")
+    assert len(events) == 1, f"Expected 1 payment event, got {len(events)}"
+    ev = events[0]
+    assert ev["event_id"] == "pe-test-001"
+    assert ev["event_type"] == "subscription_charge"
+    assert ev["amount"] == pytest.approx(9.99)
+    assert ev["currency"] == "USD"
+    assert ev["merchant_name"] == "Spotify"
+    assert ev["source_message_id"] == "msg-test-001"
+    assert ev["is_recurring_candidate"] == 1
+    assert ev["is_one_time_candidate"] == 0
+    assert ev["confidence_score"] == pytest.approx(0.85)
+
+
+def test_insert_payment_event_idempotent(conn):
+    """INSERT OR IGNORE: inserting the same event_id twice leaves only 1 row."""
+    kwargs = _make_payment_event_kwargs()
+    insert_payment_event(conn, **kwargs)
+    conn.commit()
+    insert_payment_event(conn, **kwargs)   # duplicate — must be silently ignored
+    conn.commit()
+
+    events = get_payment_events(conn, source_message_id="msg-test-001")
+    assert len(events) == 1, (
+        f"INSERT OR IGNORE must keep exactly 1 row for duplicate event_id, got {len(events)}"
+    )
+
+
+def test_payment_event_currency_none_stored(conn):
+    """currency=None is stored as SQL NULL; merchant_name is still correct."""
+    insert_payment_event(conn, **_make_payment_event_kwargs(
+        event_id="pe-null-currency",
+        source_message_id="msg-null-currency",
+        currency=None,
+        amount=None,
+    ))
+    conn.commit()
+
+    events = get_payment_events(conn, source_message_id="msg-null-currency")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["currency"] is None, (
+        f"currency=None must be stored as SQL NULL, got {ev['currency']!r}"
+    )
+    assert ev["amount"] is None, "amount=None must be stored as SQL NULL"
+    assert ev["merchant_name"] == "Spotify"
+
+
+def test_get_summary_per_currency(conn):
+    """get_summary returns monthly_costs_by_currency with per-currency totals.
+
+    1 ACTIVE ILS sub (₪12.90 MONTHLY) + 1 ACTIVE USD sub ($9.99 MONTHLY)
+    → monthly_costs_by_currency = {"ILS": 12.90, "USD": 9.99}
+    """
+    upsert_subscription(
+        conn, name="SpotifyILS", amount=12.90, currency="ILS",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE",
+        source_provider="MOCK",
+    )
+    upsert_subscription(
+        conn, name="Netflix", amount=9.99, currency="USD",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE",
+        source_provider="MOCK",
+    )
+    conn.commit()
+
+    summary = get_summary(conn)
+    costs = summary.get("monthly_costs_by_currency", {})
+
+    assert "ILS" in costs, f"ILS must appear in monthly_costs_by_currency: {costs}"
+    assert "USD" in costs, f"USD must appear in monthly_costs_by_currency: {costs}"
+    assert costs["ILS"] == pytest.approx(12.90), f"ILS total should be 12.90, got {costs['ILS']}"
+    assert costs["USD"] == pytest.approx(9.99), f"USD total should be 9.99, got {costs['USD']}"
+
+
+def test_upsert_subscription_currency_coalesce(conn):
+    """When upsert is called with currency=None on an existing row, the stored currency is preserved.
+
+    Reproduces Bug 2 (ILS→USD overwrite on re-scan): after the COALESCE fix, calling
+    upsert_subscription with currency=None must NOT overwrite an existing ILS value.
+    """
+    # Create subscription with explicit ILS currency
+    sub_id, was_created = upsert_subscription(
+        conn, name="SpotifyILSCoalesce", amount=12.90, currency="ILS",
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE",
+        source_provider="MOCK",
+    )
+    conn.commit()
+    assert was_created is True
+
+    # Re-scan: currency not extracted (None) — must NOT overwrite ILS with NULL
+    sub_id2, was_created2 = upsert_subscription(
+        conn, name="SpotifyILSCoalesce", amount=None, currency=None,
+        billing_cycle="MONTHLY", category="STREAMING", status="ACTIVE",
+        source_provider="MOCK",
+    )
+    conn.commit()
+    assert was_created2 is False, "Second upsert should return was_created=False"
+    assert sub_id == sub_id2, "Same subscription_id must be returned"
+
+    row = conn.execute(
+        "SELECT currency FROM subscriptions WHERE subscription_id = ?", (sub_id,)
+    ).fetchone()
+    assert row["currency"] == "ILS", (
+        f"currency must remain 'ILS' after upsert with currency=None, "
+        f"got {row['currency']!r}. COALESCE(?, currency) fix must be applied."
+    )
