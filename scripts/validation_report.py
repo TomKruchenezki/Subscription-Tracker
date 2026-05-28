@@ -179,6 +179,20 @@ def report(db_path: str, use_mock: bool) -> None:
     else:
         print("  (no GMAIL subscriptions)")
 
+    # ── Billing Cycle Distribution ────────────────────────────────────────────
+    print(_header("Billing Cycle Distribution (GMAIL)"))
+
+    cycle_rows = _run(conn, """
+        SELECT billing_cycle, COUNT(*) as cnt
+        FROM subscriptions WHERE source_provider = 'GMAIL'
+        GROUP BY billing_cycle ORDER BY cnt DESC
+    """)
+    if cycle_rows:
+        for row in cycle_rows:
+            print(f"  {row['billing_cycle']:<12}  {row['cnt']}")
+    else:
+        print("  (no GMAIL subscriptions)")
+
     # ── MOCK Contamination ────────────────────────────────────────────────────
     print(_header("MOCK Contamination"))
 
@@ -255,7 +269,9 @@ def report(db_path: str, use_mock: bool) -> None:
                WHEN confidence_score >= 0.70 THEN '70-79%'
                WHEN confidence_score >= 0.60 THEN '60-69%'
                WHEN confidence_score >= 0.50 THEN '50-59%'
-               ELSE '40-49%'
+               WHEN confidence_score >= 0.40 THEN '40-49%'
+               WHEN confidence_score >= 0.30 THEN '30-39%'
+               ELSE '<30%'
              END AS band,
              COUNT(*) as cnt
            FROM email_records
@@ -267,11 +283,13 @@ def report(db_path: str, use_mock: bool) -> None:
         print(f"\n  Confidence score bands:")
         band_dict = {r["band"]: r["cnt"] for r in bands}
         high_confidence_flagged = band_dict.get("80%+", 0) + band_dict.get("70-79%", 0)
-        for label in ["80%+", "70-79%", "60-69%", "50-59%", "40-49%"]:
+        for label in ["80%+", "70-79%", "60-69%", "50-59%", "40-49%", "30-39%", "<30%"]:
             cnt = band_dict.get(label, 0)
             note = ""
             if label in ("80%+", "70-79%") and cnt > 0:
                 note = "  <- check these (should be DETECTED)"  # noqa: E501
+            if label == "30-39%" and cnt > 0:
+                note = "  <- forensic-only; expect 0 after Phase 3.1 fix"
             print(f"    {label:<8} {cnt}{note}")
 
     # ── Event Types ───────────────────────────────────────────────────────────

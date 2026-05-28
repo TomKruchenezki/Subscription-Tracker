@@ -42,3 +42,35 @@ def test_parser_cap_prevents_double_count():
     assert score_both == pytest.approx(score_amount_only, abs=1e-9)
     # Confirm the capped value (0.25 + 0.50 + 0.10 = 0.85)
     assert score_both == pytest.approx(0.85, abs=1e-9)
+
+
+# ── Phase 3.1: Parser score zeroed for NONE / NOTIFICATION ───────────────────
+
+def test_none_pattern_with_amount_does_not_boost_score():
+    """Parser score is zeroed when pattern is NONE — incidental body amount doesn't count.
+    Tier 1 (0.25) + NONE (0.00) + amount (zeroed) = 0.25, not 0.35.
+    Fixes the 72 false-positive FLAGGED emails from job alerts/newsletters."""
+    score = compute_score(1, PatternType.NONE, 9.99, "UNKNOWN")
+    assert score == pytest.approx(0.25, abs=1e-9)
+
+
+def test_none_pattern_score_stays_below_forensic_threshold():
+    """Tier 1 + NONE + amount must be below the forensic threshold (0.30) after fix.
+    Before fix: 0.25 + 0.00 + 0.10 = 0.35 → FLAGGED (false positive).
+    After fix:  0.25 + 0.00 + 0.00 = 0.25 → IGNORED."""
+    score = compute_score(1, PatternType.NONE, 9.99, "UNKNOWN")
+    assert score < 0.30
+
+
+def test_receipt_pattern_with_amount_still_boosts():
+    """Parser score still counts when billing signal is present (RECEIPT).
+    Tier 1 (0.25) + RECEIPT (0.50) + amount (0.10) = 0.85 → unaffected."""
+    score = compute_score(1, PatternType.RECEIPT, 9.99, "UNKNOWN")
+    assert score == pytest.approx(0.85, abs=1e-9)
+
+
+def test_notification_pattern_with_amount_no_boost():
+    """NOTIFICATION + amount: parser score zeroed; result clamped to 0.00.
+    Tier 1 (0.25) + NOTIFICATION (-0.45) + amount (zeroed) = -0.20 → clamped 0.00."""
+    score = compute_score(1, PatternType.NOTIFICATION, 9.99, "UNKNOWN")
+    assert score == pytest.approx(0.00, abs=1e-9)

@@ -263,3 +263,40 @@ def test_space_does_not_defeat_k_guard():
     amount, currency = extract_amount("Salary $ 37K/month")
     assert amount is None
     assert currency is None
+
+
+# ── Phase 3.2: Hebrew billing support ────────────────────────────────────────
+
+def test_shekel_abbreviation_shch_extracts():
+    """ש"ח abbreviation → (amount, 'ILS')."""
+    amount, currency = extract_amount('סה"כ: 49.90 ש"ח')
+    assert amount == pytest.approx(49.90)
+    assert currency == "ILS"
+
+
+def test_shekel_abbreviation_sh_extracts():
+    """שח abbreviation (without quotes) → (amount, 'ILS')."""
+    amount, currency = extract_amount("חיוב: 12.90 שח")
+    assert amount == pytest.approx(12.90)
+    assert currency == "ILS"
+
+
+def test_hebrew_total_prefix_ils_symbol():
+    """סה\"כ prefix with ₪ symbol → (amount, 'ILS')."""
+    amount, currency = extract_amount('סה"כ ₪49.90')
+    assert amount == pytest.approx(49.90)
+    assert currency == "ILS"
+
+
+def test_hebrew_total_prefix_no_symbol_defaults_ils():
+    """סה\"כ prefix without currency symbol → defaults to ILS (Israeli invoice context)."""
+    amount, currency = extract_amount('סה"כ לתשלום: 12.90')
+    assert amount == pytest.approx(12.90)
+    assert currency == "ILS"
+
+
+def test_hebrew_total_k_guard_still_applies():
+    """K/M/B guard fires even with Hebrew total prefix — no amount extracted."""
+    amount, currency = extract_amount('סה"כ ₪37K')
+    assert amount is None
+    assert currency is None

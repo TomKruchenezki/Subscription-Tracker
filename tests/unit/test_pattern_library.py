@@ -273,3 +273,144 @@ def test_renewal_beats_just_language():
     """A genuine renewal notice with 'just $X/month' language → RENEWAL wins over PROMOTIONAL.
     Note: RENEWAL is checked before PROMOTIONAL in match_pattern(), so it wins."""
     assert match_pattern("Your subscription renewed — just $9.99/month") == PatternType.RENEWAL
+
+
+# ── Phase 3.1: New RECEIPT patterns (payment processed/complete) ──────────────
+
+def test_payment_processed_is_receipt():
+    """'Payment processed' Stripe-style subject → RECEIPT."""
+    assert match_pattern("Payment processed for your subscription") == PatternType.RECEIPT
+
+
+def test_payment_complete_is_receipt():
+    """'Payment complete' subject → RECEIPT."""
+    assert match_pattern("Payment complete — thank you") == PatternType.RECEIPT
+
+
+def test_payment_completed_is_receipt():
+    """'Payment completed' (past tense, adjacent) → RECEIPT."""
+    assert match_pattern("Payment completed — thank you for subscribing") == PatternType.RECEIPT
+
+
+# ── Phase 3.1: New NOTIFICATION patterns ─────────────────────────────────────
+
+def test_linkedin_job_count_is_notification():
+    """'3 new jobs' LinkedIn-style subject → NOTIFICATION."""
+    assert match_pattern("3 new jobs in Tel Aviv this week") == PatternType.NOTIFICATION
+
+
+def test_linkedin_jobs_matching_is_notification():
+    """'Jobs matching your search' LinkedIn subject → NOTIFICATION."""
+    assert match_pattern("Jobs matching your search: Software Engineer") == PatternType.NOTIFICATION
+
+
+def test_jobs_for_you_is_notification():
+    """'Jobs for you' digest subject → NOTIFICATION."""
+    assert match_pattern("5 new jobs for you today") == PatternType.NOTIFICATION
+
+
+def test_substack_latest_post_from_is_notification():
+    """Substack 'new post from [Author]' format → NOTIFICATION."""
+    assert match_pattern("New post from John Doe on Substack") == PatternType.NOTIFICATION
+
+
+def test_substack_apostrophe_s_post_is_notification():
+    """Author possessive 'Jane's latest post' format → NOTIFICATION."""
+    assert match_pattern("Jane's latest post: How to build better habits") == PatternType.NOTIFICATION
+
+
+def test_substack_latest_issue_from_is_notification():
+    """Newsletter 'latest issue from' format → NOTIFICATION."""
+    assert match_pattern("Latest issue from The Weekly Brief") == PatternType.NOTIFICATION
+
+
+def test_zoom_meeting_invite_is_notification():
+    """'Zoom Meeting Invitation' subject → NOTIFICATION."""
+    assert match_pattern("Zoom Meeting Invitation: Q3 Planning Session") == PatternType.NOTIFICATION
+
+
+def test_zoom_meeting_call_is_notification():
+    """'Zoom call' invitation → NOTIFICATION."""
+    assert match_pattern("Zoom call invite: Team standup tomorrow") == PatternType.NOTIFICATION
+
+
+def test_invited_to_zoom_is_notification():
+    """'Invited to a Zoom' subject → NOTIFICATION."""
+    assert match_pattern("You've been invited to a Zoom meeting") == PatternType.NOTIFICATION
+
+
+# ── Phase 3.1: Safety — billing patterns still beat new NOTIFICATION patterns ─
+
+def test_receipt_beats_zoom_notification():
+    """A real Zoom billing receipt must still be RECEIPT, not NOTIFICATION."""
+    assert match_pattern("Your Zoom receipt - $14.99") == PatternType.RECEIPT
+
+
+def test_receipt_beats_new_jobs_language():
+    """'payment' in subject beats NOTIFICATION from job count language."""
+    assert match_pattern("Payment confirmation for 3 new jobs posted") == PatternType.RECEIPT
+
+
+# ── Phase 3.2: Hebrew billing support ────────────────────────────────────────
+
+# --- Hebrew RECEIPT patterns ---
+
+def test_hebrew_card_charged_is_receipt():
+    """'כרטיסך חויב' (your card was charged) → RECEIPT."""
+    assert match_pattern("כרטיסך חויב ₪49.90") == PatternType.RECEIPT
+
+
+def test_hebrew_payment_confirmation_is_receipt():
+    """'אישור תשלום' (payment confirmation) → RECEIPT."""
+    assert match_pattern("אישור תשלום עבור המנוי שלך") == PatternType.RECEIPT
+
+
+def test_hebrew_standing_order_is_receipt():
+    """'הוראת קבע' (standing order / direct debit) → RECEIPT."""
+    assert match_pattern("הוראת קבע בוצעה בהצלחה") == PatternType.RECEIPT
+
+
+# --- Hebrew PROMOTIONAL patterns ---
+
+def test_hebrew_sale_is_promotional():
+    """'מבצע' (sale / special offer) → PROMOTIONAL."""
+    assert match_pattern("מבצע מיוחד - שדרג עכשיו") == PatternType.PROMOTIONAL
+
+
+def test_hebrew_discount_is_promotional():
+    """'הנחה' (discount) → PROMOTIONAL."""
+    assert match_pattern("הנחה של 50% לחודש הראשון") == PatternType.PROMOTIONAL
+
+
+def test_hebrew_coupon_is_promotional():
+    """'קופון' (coupon) → PROMOTIONAL."""
+    assert match_pattern("קופון הנחה לחברים חדשים") == PatternType.PROMOTIONAL
+
+
+# --- Hebrew NOTIFICATION patterns ---
+
+def test_hebrew_job_ad_is_notification():
+    """'דרושים' (jobs wanted / hiring) → NOTIFICATION."""
+    assert match_pattern("דרושים מפתחים בכירים") == PatternType.NOTIFICATION
+
+
+def test_hebrew_newsletter_is_notification():
+    """'ניוזלטר' (newsletter) → NOTIFICATION."""
+    assert match_pattern("ניוזלטר חודשי - עדכונים מהחברה") == PatternType.NOTIFICATION
+
+
+def test_hebrew_event_invite_is_notification():
+    """'הזמנה לכנס' (invitation to conference) → NOTIFICATION."""
+    assert match_pattern("הזמנה לכנס שנתי 2026") == PatternType.NOTIFICATION
+
+
+# --- Priority safety: RECEIPT beats Hebrew PROMOTIONAL / NOTIFICATION ---
+
+def test_hebrew_receipt_beats_promotional():
+    """קבלה (RECEIPT pattern) beats מבצע (PROMOTIONAL) — RECEIPT has higher priority."""
+    assert match_pattern("קבלה מבצע ₪12.90") == PatternType.RECEIPT
+
+
+def test_hebrew_receipt_beats_notification():
+    """קבלה (RECEIPT pattern) beats דרושים (NOTIFICATION) — RECEIPT has higher priority."""
+    assert match_pattern("קבלה על תשלום - דרושים") == PatternType.RECEIPT

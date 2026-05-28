@@ -49,15 +49,18 @@ _PASSES: dict[int, str] = {
     ),
     2: (
         'subject:(receipt OR invoice OR "payment confirmation" OR "billing statement" '
-        'OR charged OR "we charged")'
+        'OR charged OR "we charged" '
+        'OR חשבונית OR קבלה OR "אישור תשלום" OR חיוב OR עסקה OR "כרטיסך חויב")'
     ),
     3: (
         'subject:(subscription OR renewal OR "membership renewed" OR "auto-renew" '
-        'OR "your plan" OR "your membership")'
+        'OR "your plan" OR "your membership" '
+        'OR מנוי OR "חידוש מנוי" OR "הוראת קבע")'
     ),
     4: (
         'subject:(trial OR cancellation OR cancelled OR refund OR "failed payment" '
-        'OR "payment failed" OR "price change" OR "payment declined")'
+        'OR "payment failed" OR "price change" OR "payment declined" '
+        'OR ביטול OR החזר OR זיכוי OR "תשלום נכשל")'
     ),
     5: (
         'subject:(payment OR billing OR "your account") '

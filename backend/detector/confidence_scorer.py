@@ -28,6 +28,13 @@ Note on parser cap: amount (+0.10) and cycle (+0.05) are corroborating
 evidence for the same signal. Capping at 0.10 prevents over-weighting parser
 output relative to sender and subject signals. Do not remove the cap.
 
+Note on parser score and NONE/NOTIFICATION: parser_score is zeroed when
+pattern is NONE or NOTIFICATION. An incidental dollar amount found in the
+body_text of a job alert, newsletter, or social notification is not billing
+evidence. Without this guard, Tier 1 + NONE + body amount = 0.35, which
+exceeds the forensic threshold (0.30) and incorrectly places non-billing
+emails in the Review Queue.
+
 Note on NOTIFICATION weight: -0.45 ensures Tier 1 (0.25) + NOTIFICATION =
 -0.20, clamped to 0.00 → IGNORED in all modes. Billing patterns (RECEIPT,
 RENEWAL, etc.) have higher priority in match_pattern() and always win over
@@ -35,7 +42,7 @@ NOTIFICATION, so legitimate billing emails from Tier 1 senders are unaffected.
 
 Key score landmarks (new weights):
   Tier 1 + NONE, no amount:  0.25 → IGNORED all modes
-  Tier 1 + NONE + amount:    0.35 → FLAGGED forensic, IGNORED deep/quick
+  Tier 1 + NONE + amount:    0.25 → IGNORED all modes (parser score zeroed — see below)
   Tier 1 + RECEIPT + amount: 0.85 → DETECTED
   Tier 1 + CANCELLATION:     0.75 → DETECTED
   Tier 1 + TRIAL_STARTED:    0.70 → DETECTED (at threshold — no amount needed)
@@ -84,6 +91,12 @@ def compute_score(
     amount_delta = _AMOUNT_DELTA if amount is not None else 0.0
     cycle_delta = _CYCLE_DELTA if billing_cycle != "UNKNOWN" else 0.0
     parser_score = min(amount_delta + cycle_delta, _PARSER_CAP)
+
+    # Parser score only counts when there is subject-level billing evidence.
+    # NONE and NOTIFICATION patterns indicate no billing language in the subject;
+    # an amount or cycle found only in body_text is not reliable billing evidence.
+    if pattern in (PatternType.NONE, PatternType.NOTIFICATION):
+        parser_score = 0.0
 
     raw = tier_score + pattern_score + parser_score
     return max(0.0, min(1.0, raw))

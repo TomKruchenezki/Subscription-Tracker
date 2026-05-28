@@ -266,14 +266,17 @@ def test_tier1_no_billing_evidence_ignored(conn):
 
 
 def test_tier1_no_billing_evidence_forensic_flagged(conn):
-    """Tier 1 + NONE + amount = 0.35 → FLAGGED in forensic mode (threshold 0.30)."""
+    """Phase 3.1 fix: Tier 1 + NONE + amount = 0.25 → IGNORED in ALL modes.
+    Parser score is zeroed when pattern is NONE (no billing language in subject).
+    An incidental dollar amount in body_text is not billing evidence without a
+    subject-level billing signal. Before Phase 3.1 this was 0.35 → FLAGGED."""
     email = _make_email(
         "t019", "no-reply@spotify.com",
         "Something from Spotify: $9.99",
     )
     result = process_email(conn, email, review_threshold=0.30)
-    assert result.disposition == "FLAGGED", (
-        f"Expected FLAGGED in forensic mode (score 0.35 ≥ threshold 0.30), "
+    assert result.disposition == "IGNORED", (
+        f"Expected IGNORED (Phase 3.1 fix: parser score zeroed for NONE → 0.25 < 0.30), "
         f"got {result.disposition}"
     )
     assert len(get_subscriptions(conn)) == 0
@@ -410,3 +413,89 @@ def test_google_com_notification_still_ignored(conn):
         f"Expected IGNORED (NOTIFICATION pattern suppresses Tier 1 score), got {result.disposition}"
     )
     assert len(get_subscriptions(conn)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2: Hebrew billing support — integration tests
+# ---------------------------------------------------------------------------
+
+def _make_email_with_snippet(message_id, sender, subject, snippet=None, date_str="2025-05-01T08:00:00Z"):
+    """Like _make_email but also supports an optional snippet field."""
+    return EmailMetadata(
+        source_message_id=message_id,
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        source_account_email="demo@mock.local",
+        sender_address=sender,
+        sender_name=None,
+        subject=subject,
+        email_date=datetime.fromisoformat(date_str.replace("Z", "+00:00")),
+        snippet=snippet,
+    )
+
+
+def test_hebrew_receipt_with_ils_amount_detected(conn):
+    """Hebrew subject + ₪ amount in snippet → DETECTED, ACTIVE subscription."""
+    email = _make_email_with_snippet(
+        "heb-001",
+        "billing@spotify.com",
+        "קבלה על תשלום",
+        snippet="חויבת ₪12.90 עבור Spotify Premium",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Expected DETECTED (Hebrew RECEIPT subject + ILS amount in snippet), got {result.disposition}"
+    )
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["amount"] == pytest.approx(12.90)
+    assert subs[0]["status"] == "ACTIVE"
+
+
+def test_hebrew_promotion_with_price_ignored(conn):
+    """Hebrew promotional email with ₪ price → IGNORED (PROMOTIONAL penalty suppresses score)."""
+    email = _make_email(
+        "heb-002",
+        "no-reply@spotify.com",
+        "מבצע מיוחד - שדרג ל-Premium ב-₪7.90 לחודש הראשון",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "IGNORED", (
+        f"Expected IGNORED (מבצע = PROMOTIONAL pattern suppresses score), got {result.disposition}"
+    )
+    assert len(get_subscriptions(conn)) == 0
+
+
+def test_hebrew_renewal_subject_detected(conn):
+    """Hebrew renewal subject + ₪/mo amount in snippet → DETECTED, MONTHLY billing cycle."""
+    email = _make_email_with_snippet(
+        "heb-003",
+        "billing@spotify.com",
+        "חידוש מנוי Spotify",
+        snippet="₪12.90/mo — Spotify Premium חודשי",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Expected DETECTED (Hebrew חידוש מנוי = RENEWAL pattern + amount), got {result.disposition}"
+    )
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["amount"] == pytest.approx(12.90)
+    assert subs[0]["billing_cycle"] == "MONTHLY"
+
+
+def test_mixed_hebrew_english_works(conn):
+    """English subject from Tier 1 sender, Hebrew snippet with ₪ amount → both contribute correctly."""
+    email = _make_email_with_snippet(
+        "heb-004",
+        "billing@spotify.com",
+        "Your Spotify Premium receipt",
+        snippet="חויבת ₪12.90 עבור Spotify Premium",
+    )
+    result = process_email(conn, email)
+    assert result.disposition == "DETECTED", (
+        f"Expected DETECTED (English RECEIPT subject + Hebrew ILS amount in snippet), got {result.disposition}"
+    )
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    assert subs[0]["amount"] == pytest.approx(12.90)

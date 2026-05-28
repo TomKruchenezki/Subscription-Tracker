@@ -107,3 +107,87 @@ def test_weekly_writing_stats_no_billing_context():
 def test_monthly_newsletter_no_billing_context():
     """LinkedIn-style: 'monthly' in newsletter context stays UNKNOWN."""
     assert detect_cycle("Monthly newsletter: top stories for you") == "UNKNOWN"
+
+
+# ── Phase 3.1: ANNUAL and QUARTERLY context-gating ───────────────────────────
+
+def test_annual_without_billing_context_returns_unknown():
+    """'annual' alone with no billing words → UNKNOWN.
+    Prevents Spotify HTML body ('Save with Annual plan') from triggering ANNUAL."""
+    assert detect_cycle("Your annual performance review") == "UNKNOWN"
+
+
+def test_annual_with_billing_context_returns_annual():
+    """'annual' + billing word in same text → ANNUAL."""
+    assert detect_cycle("Your annual subscription renews") == "ANNUAL"
+
+
+def test_per_year_always_fires():
+    """'/year' is a strong positional pattern — fires without billing context."""
+    assert detect_cycle("Plan costs $9.99/year") == "ANNUAL"
+
+
+def test_yr_always_fires():
+    """'/yr' is a strong positional pattern — fires without billing context."""
+    assert detect_cycle("$99/yr") == "ANNUAL"
+
+
+def test_yearly_requires_billing_context():
+    """'yearly' without billing words → UNKNOWN."""
+    assert detect_cycle("Set your yearly goals here") == "UNKNOWN"
+
+
+def test_yearly_with_billing_context_returns_annual():
+    """'yearly' + billing word → ANNUAL."""
+    assert detect_cycle("Yearly plan fee: $99") == "ANNUAL"
+
+
+def test_quarterly_without_billing_context_returns_unknown():
+    """'quarterly' without billing words → UNKNOWN.
+    Prevents 'Q3 quarterly business review' from misclassifying."""
+    assert detect_cycle("Q3 quarterly business review") == "UNKNOWN"
+
+
+def test_quarterly_with_billing_context_returns_quarterly():
+    """'quarterly' + billing word → QUARTERLY."""
+    assert detect_cycle("Quarterly billing: $29.99 charged") == "QUARTERLY"
+
+
+def test_every_3_months_always_fires():
+    """'every 3 months' is a strong positional pattern — fires without billing context."""
+    assert detect_cycle("Billed every 3 months") == "QUARTERLY"
+
+
+def test_hebrew_quarterly_requires_billing_context():
+    """Hebrew 'רבעוני' + Hebrew billing word 'חיוב' → QUARTERLY.
+    'חיוב' (charge/billing) is in the Hebrew billing context list."""
+    assert detect_cycle("חיוב רבעוני") == "QUARTERLY"
+
+
+def test_spotify_body_text_annual_mention_does_not_override_monthly():
+    """Core regression: Spotify billing body has 'annual' in plan comparison section
+    but the actual charge is monthly. With context-gating, 'annual' requires a billing
+    context word in the SAME text. When body_text is checked after subject/snippet,
+    the subject/snippet already return MONTHLY from the /mo positional pattern."""
+    subject = "חידוש מנוי Spotify"  # Hebrew: "Spotify subscription renewal"
+    snippet = "₪12.90/mo — Premium"  # /mo is a strong MONTHLY signal
+    body_text = "Save with Annual plan — switch to annual and save 15%"
+    result = detect_cycle(subject, snippet=snippet, body_text=body_text)
+    assert result == "MONTHLY"
+
+
+# ── Phase 3.2: Hebrew billing support ────────────────────────────────────────
+
+def test_hebrew_weekly_cycle():
+    """שבועי (weekly, Hebrew) with billing context word 'חיוב' → WEEKLY."""
+    assert detect_cycle("חיוב שבועי") == "WEEKLY"
+
+
+def test_hebrew_every_month_is_monthly():
+    """כל חודש (every month, Hebrew) → MONTHLY (strong positional pattern)."""
+    assert detect_cycle("כל חודש ₪9.90") == "MONTHLY"
+
+
+def test_hebrew_every_year_is_annual():
+    """כל שנה (every year, Hebrew) → ANNUAL (strong positional pattern)."""
+    assert detect_cycle("כל שנה ₪99") == "ANNUAL"

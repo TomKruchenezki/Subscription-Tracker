@@ -5,7 +5,7 @@ by reading Gmail metadata only (sender, subject, date — never body). All data 
 a local SQLite file. No cloud sync, no bank access, no telemetry.
 
 **Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 1 — mock data + local detection engine (see `docs/ROADMAP.md`)
+**Current phase:** Phase 3.0 complete — HTML extraction fixed. See `docs/CURRENT_STATE.md`.
 
 ---
 
@@ -62,18 +62,18 @@ Both approvals are required for any new `email_records` or `subscriptions` colum
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Repo scaffold: docs, CLAUDE.md, agents | **Current** |
-| 1 | Mock data + local detection engine | Not started |
-| 2 | Gmail OAuth integration (read-only) | Not started |
-| 3 | Polish, CSV export, renewal predictions | Not started |
+| 0 | Repo scaffold | Complete |
+| 1 | Mock data + local detection engine | Complete |
+| 2 | Gmail OAuth integration (read-only) | Complete |
+| 3.0 | HTML body extraction fixes | **Complete** |
+| 3.1 | payment_events + event linking | Next |
+| 3.2 | Provider-specific parsers | Planned |
+| 3.3 | Attachment/PDF parsing | Planned |
 | Future | AI parsing, bank integration | Not planned |
 
-**Phase gate:** Do not begin Phase 2 until Phase 1 achieves 90%+ test coverage and
-all privacy compliance tests pass.
-
-**When a phase completes:** Update the Status column above and update the **Current phase**
-line at the top of this file. This keeps agents reading CLAUDE.md oriented to the project's
-actual state without needing to parse git history.
+**When a phase completes:** Update the Status column above and the **Current phase**
+line at the top of this file. Also update `docs/CURRENT_STATE.md` with the new test
+count, scan results, and known problems.
 
 ---
 
@@ -152,6 +152,33 @@ subscription-tracker/
 **Before every commit:**
 - Run `pytest tests/privacy/` — must pass at 100%
 - Every PR description must answer: "What data does this change collect, store, or transmit?"
+
+---
+
+## Cost-Discipline Rules (Token Efficiency)
+
+Follow in every session unless the user explicitly overrides.
+
+1. **Read `docs/CURRENT_STATE.md` first.** It has the current phase, test count, known
+   problems, and verification commands. Do not infer project state from other files.
+2. **Do not read the whole repo.** Inspect only files relevant to the current task.
+   Use Grep/Glob to locate files; Read only what is needed.
+3. **Use Plan Mode for broad changes.** Any change touching > 2 files or requiring
+   architectural decisions must use Plan Mode before any edits.
+4. **No implementation before explicit approval.** Wait for ExitPlanMode approval before
+   writing code. "Sounds good" is not approval.
+5. **Targeted tests first.** Run `python -m pytest tests/unit/test_<module>.py -q`
+   while iterating. Save the full suite for the end.
+6. **Full pytest only at the end.** Run `python -m pytest tests/ -q` once, after all
+   changes are complete. Do not run it speculatively between edits.
+7. **TypeScript check only if frontend changed.** Run `cd frontend && npm run type-check`
+   only when `.tsx`/`.ts` files were modified.
+8. **Do not spawn subagents unless explicitly asked.** Each spawn starts cold and
+   re-derives context expensively. Handle tasks inline with direct tools.
+9. **Keep summaries concise.** 3–5 bullet points after task completion. No verbatim
+   plan recap.
+10. **Never print raw email content.** Do not output email bodies, snippets, OAuth tokens,
+    DB row contents, or secrets — even in debug output or code comments.
 
 ---
 

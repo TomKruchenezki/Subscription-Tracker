@@ -68,6 +68,8 @@ _CURRENCY_MAP = {
     "JPY": "JPY",
     "INR": "INR",
     "ILS": "ILS",
+    'ש"ח': "ILS",   # Israeli shekel abbreviation (common on invoices)
+    "שח": "ILS",    # Israeli shekel abbreviation (without quotes)
 }
 
 _AMOUNT_RE = re.compile(
@@ -76,8 +78,16 @@ _AMOUNT_RE = re.compile(
     # HTML stripping produces "$ 12.90". The K/M/B guard in _NON_MONETARY_PATTERNS fires
     # before this regex, so "₪37K" is still correctly rejected.
     r"(?P<sym>[$€£¥₹₪])\s*(?P<amount>\d{1,5}(?:\.\d{1,2})?)"
-    r"|(?P<amount2>\d{1,5}(?:\.\d{1,2})?)\s*(?P<code>USD|EUR|GBP|CAD|AUD|JPY|INR|ILS)",
+    r'|(?P<amount2>\d{1,5}(?:\.\d{1,2})?)\s*(?P<code>USD|EUR|GBP|CAD|AUD|JPY|INR|ILS|ש"ח|שח)',
     re.IGNORECASE,
+)
+
+# Hebrew "total due" prefix patterns — e.g. 'סה"כ ₪49.90', 'סך הכל לתשלום: 12.90 ש"ח'
+# Checked BEFORE _AMOUNT_RE because the prefix is a strong signal of a billing total.
+# When no currency symbol follows, ILS is assumed (all Israeli invoices use ILS).
+_HEBREW_TOTAL_RE = re.compile(
+    r'(?:סה"כ|סך\s+הכל)\s*(?:לתשלום\s*:?\s*)?'
+    r'(?P<sym>[$€£¥₹₪])?\s*(?P<amount>\d{1,5}(?:\.\d{1,2})?)',
 )
 
 _MIN_AMOUNT = 0.99
@@ -101,13 +111,28 @@ def _extract_from_text(text: str) -> tuple[float | None, str | None]:
         if non_monetary.search(text):
             return (None, None)
 
+    # Hebrew total-prefix pattern — try first (more specific than general _AMOUNT_RE)
+    # e.g. 'סה"כ ₪49.90' or 'סה"כ לתשלום: 12.90 ש"ח'
+    m = _HEBREW_TOTAL_RE.search(text)
+    if m:
+        try:
+            raw = float(m.group("amount"))
+            if _MIN_AMOUNT <= raw <= _MAX_AMOUNT:
+                sym = m.group("sym") or ""
+                currency = _CURRENCY_MAP.get(sym, "ILS")  # no symbol → ILS (Israeli context)
+                return (round(raw, 2), currency)
+        except (TypeError, ValueError):
+            pass
+
     for match in _AMOUNT_RE.finditer(text):
         if match.group("sym"):
             raw = float(match.group("amount"))
             currency = _CURRENCY_MAP.get(match.group("sym"), "USD")
         else:
             raw = float(match.group("amount2"))
-            currency = _CURRENCY_MAP.get(match.group("code").upper(), "USD")
+            code = match.group("code")
+            # Normalise Hebrew abbreviations before looking up in _CURRENCY_MAP
+            currency = _CURRENCY_MAP.get(code, None) or _CURRENCY_MAP.get(code.upper(), "USD")
 
         if _MIN_AMOUNT <= raw <= _MAX_AMOUNT:
             return (raw, currency)

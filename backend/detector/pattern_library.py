@@ -59,6 +59,9 @@ _TRIAL_END_PATTERNS = [
     re.compile(r"\bfree\s+trial\s+(end|expir)\w*", re.IGNORECASE),
     re.compile(r"\btrial\s+is\s+(ending|expiring|almost\s+over)\b", re.IGNORECASE),
     re.compile(r"\btrial\s+period\s+end\w*", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bניסיון\s+(?:מסתיים|יסתיים|מסתיים\s+בקרוב)\b"),   # trial ending/will end
+    re.compile(r"\bתקופת\s+ניסיון\s+(?:מסתיימת?|מסתיים)\b"),         # trial period ending
 ]
 
 _TRIAL_STARTED_PATTERNS = [
@@ -78,12 +81,16 @@ _PRICE_CHANGE_PATTERNS = [
     re.compile(r"\bnew\s+price\b", re.IGNORECASE),
     re.compile(r"\bsubscription\s+price\s+will\b", re.IGNORECASE),
     re.compile(r"\brate\s+change\b", re.IGNORECASE),
+    # Hebrew
+    re.compile(r"\bשינוי\s+(?:ב)?מחיר\b"),          # price change
+    re.compile(r"\b(?:עלייה|עלית)\s+(?:ב)?תשלום\b"),# payment increase
+    re.compile(r"\bמחיר\s+חדש\b"),                  # new price
 ]
 
 _RECEIPT_PATTERNS = [
     re.compile(r"\breceipt\b", re.IGNORECASE),
     re.compile(r"\binvoice\b", re.IGNORECASE),
-    re.compile(r"\bpayment\s+(confirmation|received|successful)\b", re.IGNORECASE),
+    re.compile(r"\bpayment\s+(confirmation|received|successful|processed|complete[d]?)\b", re.IGNORECASE),
     re.compile(r"\byour\s+(order|purchase|charge)\b", re.IGNORECASE),
     re.compile(r"\bthank\s+you\s+for\s+(your\s+)?(payment|purchase|subscription)\b", re.IGNORECASE),
     re.compile(r"\bbilling\s+(confirmation|statement)\b", re.IGNORECASE),
@@ -95,6 +102,10 @@ _RECEIPT_PATTERNS = [
     re.compile(r"\bעסקה\b"),                     # transaction
     re.compile(r"\bחיוב\b"),                     # charge/billing
     re.compile(r"\bתשלום\b"),                    # payment
+    re.compile(r"\bכרטיסך\s+חויב\b"),           # your card was charged
+    re.compile(r"\bאישור\s+תשלום\b"),            # payment confirmation
+    re.compile(r"\bהתשלום\s+התקבל\b"),           # payment received
+    re.compile(r"\bהוראת\s+קבע\b"),             # standing order / direct debit
 ]
 
 _RENEWAL_PATTERNS = [
@@ -131,6 +142,13 @@ _PROMOTIONAL_PATTERNS = [
     re.compile(r"\bjust\s+[$€£₪¥₹]\d", re.IGNORECASE),
     re.compile(r"\bstarting\s+(?:at|from)\s+[$€£₪¥₹]", re.IGNORECASE),
     re.compile(r"\bget\s+\w+\s+for\s+(?:just\s+)?[$€£₪¥₹]", re.IGNORECASE),
+    # Hebrew promotional / discount language
+    re.compile(r"\bמבצע\b"),                     # sale / special offer
+    re.compile(r"\bהנחה\b"),                     # discount
+    re.compile(r"\bקופון\b"),                    # coupon
+    re.compile(r"\bחינם\s+ל(?:חודש|שבוע|שנה)\b"),  # free for month/week/year
+    re.compile(r"\bהצעה\s+מיוחדת\b"),            # special offer
+    re.compile(r"\bחסוך\b|\bחסכי\b"),            # save (imperative m/f)
 ]
 
 _NOTIFICATION_PATTERNS = [
@@ -201,6 +219,23 @@ _NOTIFICATION_PATTERNS = [
     # Exam / schedule notifications (Wix, etc.)
     re.compile(r"\b(exam|test|assessment)\s+schedule\b", re.IGNORECASE),
     re.compile(r"\benter\s+exam\b", re.IGNORECASE),
+    # LinkedIn job counts / job search results
+    re.compile(r"\b\d+\s+new\s+jobs?\b", re.IGNORECASE),           # "3 new jobs in your area"
+    re.compile(r"\bjobs?\s+(matching|in\s+your|for\s+you)\b", re.IGNORECASE),
+    # Substack / newsletter content format not caught by existing patterns
+    re.compile(r"\b(latest|new)\s+(post|essay|article|issue)\s+from\b", re.IGNORECASE),
+    re.compile(r"'s\s+(latest|new)\s+(post|essay|article|newsletter|issue)\b", re.IGNORECASE),
+    # Zoom meeting invitations (distinct from webinar patterns already above)
+    re.compile(r"\bzoom\s+(meeting|call|session)\s*(invite|invitation|scheduled|reminder)?\b",
+               re.IGNORECASE),
+    re.compile(r"\binvit(ed|ation)\s+to\s+(a\s+)?zoom\b", re.IGNORECASE),
+    # Hebrew non-billing notifications
+    re.compile(r"\bדרושים\b"),                   # jobs wanted / hiring ad
+    re.compile(r"\bניוזלטר\b"),                  # newsletter (loan word)
+    re.compile(r"\bעדכון\s+(?:חשוב|בנושא|על)\b"),    # important update / update on topic
+    re.compile(r"\bהזמנה\s+ל(?:אירוע|כנס|וובינר)\b"),  # invitation to event/conference/webinar
+    re.compile(r"\bפרסומת\b|\bמודעה\b"),         # advertisement / ad
+    re.compile(r"\bהתרעה\b"),                    # alert / warning (non-billing security alert)
 ]
 
 
