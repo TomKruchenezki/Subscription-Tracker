@@ -44,3 +44,17 @@ export function formatCurrency(amount: number, currency: string | null | undefin
 export function formatMonthly(amount: number, currency: string | null | undefined): string {
   return `${formatCurrency(amount, currency)}/mo`;
 }
+
+/**
+ * Format a UTC ISO date/datetime string in the browser's local timezone.
+ * Returns e.g. "Jan 15, 2026". Returns "—" for null/empty input.
+ * DB values are always UTC; this converts to local time for display only.
+ */
+export function formatDateLocal(utcString: string | null | undefined): string {
+  if (!utcString) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(utcString));
+}

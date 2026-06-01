@@ -352,11 +352,22 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
                          evidence_summary: str | None = None,
                          missing_evidence: str | None = None,
                          suggested_action: str | None = None,
-                         detection_state: str | None = None) -> str | None:
+                         detection_state: str | None = None,
+                         # Phase 3.8: processor/merchant separation + account + cycle confidence
+                         sender_domain: str | None = None,
+                         payment_processor: str | None = None,
+                         merchant_name_candidate: str | None = None,
+                         is_processor_email: int = 0,
+                         gmail_account_id: str | None = None,
+                         cycle_source: str | None = None,
+                         cycle_confidence: str | None = None) -> str | None:
     """Insert an email record. Returns None if source_message_id already exists (dedup).
 
-    Phase 3.6 adds 5 optional explanation fields. All must be structured summaries only —
-    no raw subject, body, HTML, snippet, sender address, or PII.
+    Phase 3.6 adds 5 optional explanation fields.
+    Phase 3.8 adds sender_domain, payment_processor, merchant_name_candidate,
+    is_processor_email, gmail_account_id, cycle_source, cycle_confidence.
+    All structured fields only — no raw subject, body, HTML, snippet, or PII.
+    merchant_name_candidate must never contain raw body text or raw PDF text.
     """
     existing = conn.execute(
         "SELECT record_id FROM email_records WHERE source_message_id = ?",
@@ -375,15 +386,22 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
             confidence_score, disposition, event_type, billing_period_start,
             billing_period_end, short_evidence,
             decision_reason, evidence_summary, missing_evidence, suggested_action,
-            detection_state, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            detection_state,
+            sender_domain, payment_processor, merchant_name_candidate,
+            is_processor_email, gmail_account_id, cycle_source, cycle_confidence,
+            created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                   ?, ?, ?, ?, ?, ?, ?, ?)""",
         (record_id, subscription_id, source_message_id, source_provider,
          source_account_id, source_account_email, sender_address, sender_name,
          subject, email_date, amount_extracted, currency_extracted,
          confidence_score, disposition, event_type, billing_period_start,
          billing_period_end, short_evidence,
          decision_reason, evidence_summary, missing_evidence, suggested_action,
-         detection_state, now),
+         detection_state,
+         sender_domain, payment_processor, merchant_name_candidate,
+         is_processor_email, gmail_account_id, cycle_source, cycle_confidence,
+         now),
     )
     return record_id
 
@@ -394,12 +412,15 @@ def get_email_records(
     account_id: str | None = None,
     source_provider: str | None = None,
     include_dismissed: bool = False,
+    exclude_processor_rows: bool = False,
 ) -> list[sqlite3.Row]:
     """Return email_records with optional filters.
 
     By default (include_dismissed=False) user-dismissed records are excluded
     from results so the Review Queue stays clean after dismissal.
     Pass include_dismissed=True to include them (e.g. for validation report).
+    exclude_processor_rows=True hides is_processor_email=1 rows from the
+    subscription Review Queue (they still appear in Payment Events).
     """
     conditions = []
     params: list = []
@@ -414,6 +435,8 @@ def get_email_records(
         params.append(source_provider)
     if not include_dismissed:
         conditions.append("user_dismissed = 0")
+    if exclude_processor_rows:
+        conditions.append("COALESCE(is_processor_email, 0) = 0")
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
         f"SELECT * FROM email_records {where} ORDER BY email_date DESC", params
@@ -929,6 +952,21 @@ def get_user_corrections(
 # ── Phase 3.6: Explainability + Correction-Awareness ─────────────────────────
 
 import hashlib as _hashlib
+
+
+def get_subscription_account_aliases(conn: sqlite3.Connection, subscription_id: str) -> list[str]:
+    """Return deduplicated privacy-safe account aliases for all email_records linked to a subscription.
+
+    Uses source_account_id from email_records (not subscriptions) so all contributing accounts
+    are included even if the subscription row itself only records one account.
+    Returns an empty list when no linked email_records have account IDs.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT source_account_id FROM email_records "
+        "WHERE subscription_id = ? AND source_account_id IS NOT NULL",
+        (subscription_id,),
+    ).fetchall()
+    return [a for r in rows if (a := account_alias(r["source_account_id"]))]
 
 
 def account_alias(account_id: str | None) -> str | None:

@@ -15,12 +15,14 @@ def parse_email_metadata(email: EmailMetadata):
         email.subject, snippet=email.snippet, body_text=email.body_text
     )
     canonical_name = resolve_sender(email.sender_address)
-    cycle = detect_cycle(
+    cycle_result = detect_cycle(
         email.subject, snippet=email.snippet, body_text=email.body_text
     )
     return {
         "canonical_name": canonical_name,
         "amount": amount,
         "currency": currency,
-        "billing_cycle": cycle,
+        "billing_cycle": cycle_result.cycle,
+        "cycle_source": cycle_result.cycle_source,
+        "cycle_confidence": cycle_result.cycle_confidence,
     }

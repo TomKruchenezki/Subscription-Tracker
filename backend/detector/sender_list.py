@@ -121,6 +121,42 @@ TIER_2: set[str] = {
     # paypal.com moved to Tier 1 (sends its own subscription receipts)
 }
 
+# ── Payment processor domains ─────────────────────────────────────────────────
+# Emails from these domains originate from a payment gateway / invoicing platform,
+# not from a subscription provider. The actual merchant is determined from the PDF
+# structured fields or the email subject — not from the sender domain.
+#
+# Rules applied in detector.py when sender domain is in PROCESSOR_DOMAINS:
+#   - email_records.payment_processor = canonical processor name
+#   - email_records.is_processor_email = 1
+#   - Without strong recurring evidence → event_type = "one_time_charge" / "unknown_payment"
+#   - Row is stored (never IGNORED) but hidden from subscription Review Queue
+# Maps domain → canonical processor name
+PROCESSOR_DOMAINS: dict[str, str] = {
+    # ── Israeli payment processors ───────────────────────────────────────────
+    "cardcom.co.il":      "Cardcom",
+    "mail.cardcom.co.il": "Cardcom",
+    "z-credit.co.il":     "Z-Credit",
+    "zcredit.co.il":      "Z-Credit",
+    "morning.co.il":      "Morning",        # formerly iCount
+    "icount.co.il":       "Morning",        # iCount (rebranded as Morning)
+    "ravpass.co.il":      "RavPass",
+    "grow.me":            "Grow",
+    "grow.il":            "Grow",
+    "invoices.grow.me":   "Grow",
+    "priority.co.il":     "Priority",       # Priority ERP invoicing
+    "tranzila.com":       "Tranzila",
+    "paylink.co.il":      "Paylink",
+    "meshulam.co.il":     "Meshulam",
+    # ── Global invoice / billing platforms (non-subscription receipts) ────────
+    # stripe.com / paddle.com etc. are in TIER_2 (they also send real subscription
+    # receipts). Only add here if the domain exclusively sends one-time invoices.
+    "invoices.bill.com":  "Bill.com",
+    "mail.quickbooks.com": "QuickBooks",
+    "invoice.payoneer.com": "Payoneer",
+}
+
+
 # Domains excluded from subscription detection entirely
 EXCLUDED: set[str] = {
     "amazon.com",      # One-time purchases — use primevideo.com for Prime
@@ -140,7 +176,7 @@ def get_tier(domain: str) -> tuple[int, str | None]:
     tier 1 = known subscription service
     tier 2 = billing-adjacent but unconfirmed
     tier 0 = no match
-    Returns (0, None) for excluded domains to signal explicit rejection.
+    Returns (-1, None) for excluded domains to signal explicit rejection.
     """
     domain = domain.lower()
 
@@ -159,3 +195,14 @@ def get_tier(domain: str) -> tuple[int, str | None]:
         return (2, None)
 
     return (0, None)
+
+
+def get_processor_name(domain: str) -> str | None:
+    """Return the canonical processor name if domain is a known payment processor, else None."""
+    domain = domain.lower()
+    if domain in PROCESSOR_DOMAINS:
+        return PROCESSOR_DOMAINS[domain]
+    for known_domain, name in PROCESSOR_DOMAINS.items():
+        if domain.endswith("." + known_domain):
+            return name
+    return None

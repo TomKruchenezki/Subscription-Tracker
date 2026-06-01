@@ -22,6 +22,11 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+try:
+    from zoneinfo import ZoneInfo
+    _HAS_ZONEINFO = True
+except ImportError:
+    _HAS_ZONEINFO = False
 
 
 # ── .env loader (no third-party deps) ────────────────────────────────────────
@@ -62,6 +67,27 @@ def _fmt_amount(amount) -> str:
     return f"${float(amount):>6.2f}"
 
 
+def _fmt_utc_local(utc_str: str | None, local_tz: str = "Asia/Jerusalem") -> str:
+    """Return 'YYYY-MM-DD HH:MM UTC (HH:MM Local)' from a UTC ISO string.
+
+    Falls back to UTC-only if zoneinfo is unavailable or parsing fails.
+    """
+    if not utc_str:
+        return "—"
+    try:
+        dt_utc = datetime.fromisoformat(utc_str.replace("Z", "+00:00")).replace(tzinfo=timezone.utc)
+        utc_part = dt_utc.strftime("%Y-%m-%d %H:%M UTC")
+        if _HAS_ZONEINFO:
+            try:
+                dt_local = dt_utc.astimezone(ZoneInfo(local_tz))
+                return f"{utc_part} ({dt_local.strftime('%H:%M')} {local_tz})"
+            except Exception:
+                pass
+        return utc_part
+    except Exception:
+        return str(utc_str)[:19]
+
+
 # ── Report sections ───────────────────────────────────────────────────────────
 
 def _run(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
@@ -77,7 +103,10 @@ def report(db_path: str, use_mock: bool) -> None:
         print(f"ERROR: Cannot open database at {db_path!r}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    app_tz = os.getenv("APP_TIMEZONE", "Asia/Jerusalem")
+    _now_utc = datetime.now(timezone.utc)
+    now_utc_str = _now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = _fmt_utc_local(now_utc_str, app_tz)
 
     # ── Header ────────────────────────────────────────────────────────────────
     print("+" + "=" * W + "+")
@@ -609,8 +638,7 @@ def report(db_path: str, use_mock: bool) -> None:
             "SELECT COUNT(*) FROM payment_events WHERE needs_attachment_review = 1")[0][0]
         if attach_count > 0:
             print(_header(f"Attachment Review Queue ({attach_count})"))
-            print(f"  These events have a known merchant but amount is in an attachment.")
-            print(f"  Amount extraction from PDF/HTML not yet implemented (Phase 3.5).\n")
+            print(f"  These events have a known merchant but PDF amount is still pending.\n")
             attach_rows = _run(conn,
                 """SELECT merchant_name, event_type, event_date
                    FROM payment_events WHERE needs_attachment_review = 1
@@ -926,6 +954,103 @@ def report(db_path: str, use_mock: bool) -> None:
         else:
             print("  User corrections on PDF-derived rows: none")
 
+        print()
+
+    # ── Phase 3.8: Processor / merchant separation ───────────────────────────────
+    # Gracefully skip if columns don't exist (pre-migration 012 databases)
+    has_phase38_cols = False
+    try:
+        _run(conn, "SELECT is_processor_email FROM email_records LIMIT 1")
+        has_phase38_cols = True
+    except Exception:
+        pass
+
+    if has_phase38_cols:
+        print(_header("Phase 3.8: Processor / Merchant Separation"))
+
+        proc_total = _run(conn,
+            "SELECT COUNT(*) FROM email_records WHERE COALESCE(is_processor_email,0)=1 "
+            "AND source_provider='GMAIL'")[0][0]
+        print(f"  Processor-email rows (GMAIL):         {proc_total}")
+
+        if proc_total > 0:
+            proc_by_processor = _run(conn,
+                "SELECT COALESCE(payment_processor,'(unknown)') AS proc, COUNT(*) as cnt "
+                "FROM email_records WHERE COALESCE(is_processor_email,0)=1 "
+                "AND source_provider='GMAIL' "
+                "GROUP BY proc ORDER BY cnt DESC")
+            print(f"  By payment_processor:")
+            for row in proc_by_processor:
+                print(f"    {row['proc']:<20}  {row['cnt']}")
+
+            proc_by_event = _run(conn,
+                "SELECT COALESCE(event_type,'(none)') AS et, COUNT(*) as cnt "
+                "FROM email_records WHERE COALESCE(is_processor_email,0)=1 "
+                "AND source_provider='GMAIL' "
+                "GROUP BY et ORDER BY cnt DESC")
+            print(f"  By event_type:")
+            for row in proc_by_event:
+                print(f"    {row['et']:<25}  {row['cnt']}")
+
+            proc_in_review_queue = _run(conn,
+                "SELECT COUNT(*) FROM email_records "
+                "WHERE COALESCE(is_processor_email,0)=1 "
+                "AND source_provider='GMAIL' AND disposition='FLAGGED' "
+                "AND COALESCE(user_dismissed,0)=0")[0][0]
+            flag_proc_rq = _flag(proc_in_review_queue == 0, warn=proc_in_review_queue > 0)
+            print(f"  Processor rows in Review Queue:       {flag_proc_rq}  {proc_in_review_queue}")
+            if proc_in_review_queue > 0:
+                print(f"    (these should be excluded by the exclude_processor_rows API filter)")
+
+        # One-time leakage: FLAGGED rows that look like one-time payments, not subscriptions
+        one_time_flagged = _run(conn,
+            "SELECT COUNT(*) FROM email_records "
+            "WHERE disposition='FLAGGED' AND source_provider='GMAIL' "
+            "AND event_type IN ('one_time_charge','unknown_payment') "
+            "AND COALESCE(is_processor_email,0)=0")[0][0]
+        print(f"\n  One-time leakage (non-processor FLAGGED one_time/unknown):  {one_time_flagged}")
+        if one_time_flagged > 5:
+            print(f"    WARN: {one_time_flagged} one-time payments in Review Queue — "
+                  f"consider adding their domains to sender exclusions")
+
+        # PDF extraction rate for needs_attachment_review events
+        if has_payment_events:
+            nar_with_amount = _run(conn,
+                "SELECT COUNT(*) FROM payment_events "
+                "WHERE needs_attachment_review=1 AND amount IS NOT NULL")[0][0]
+            nar_without_amount = _run(conn,
+                "SELECT COUNT(*) FROM payment_events "
+                "WHERE needs_attachment_review=1 AND amount IS NULL")[0][0]
+            nar_total = nar_with_amount + nar_without_amount
+            if nar_total > 0:
+                print(f"\n  PDF extraction rate (needs_attachment_review=1):")
+                print(f"    Amount extracted:   {nar_with_amount} / {nar_total}")
+                print(f"    Amount still NULL:  {nar_without_amount} / {nar_total}")
+                if nar_without_amount == 0:
+                    print(f"    PASS  All PDF amounts extracted.")
+                else:
+                    print(f"    WARN  {nar_without_amount} events still awaiting PDF extraction.")
+
+        # Weak cycle inference
+        weak_cycle_subs = _run(conn,
+            "SELECT COUNT(*) FROM subscriptions s "
+            "WHERE source_provider != 'MOCK' AND EXISTS ("
+            "  SELECT 1 FROM email_records er "
+            "  WHERE er.subscription_id = s.subscription_id "
+            "  AND COALESCE(er.cycle_confidence,'STRONG') = 'WEAK'"
+            ")")[0][0]
+        print(f"\n  Subscriptions with weak cycle inference:  {weak_cycle_subs}")
+        if weak_cycle_subs > 0:
+            print(f"    These had billing_cycle overridden to UNKNOWN (not stored as inferred).")
+
+        # Pre-3.8 rows without gmail_account_id
+        old_rows = _run(conn,
+            "SELECT COUNT(*) FROM email_records "
+            "WHERE COALESCE(gmail_account_id,'') = '' "
+            "AND source_provider='GMAIL'")[0][0]
+        print(f"\n  Records without account (pre-3.8):        {old_rows}")
+        if old_rows > 0:
+            print(f"    Re-scan to populate gmail_account_id for these rows.")
         print()
 
     conn.close()

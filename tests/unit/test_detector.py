@@ -898,3 +898,160 @@ def test_apple_music_subscription_gets_correct_name(conn):
         f"Apple sender + 'Apple Music' subject must create subscription named 'Apple Music', "
         f"got {subs[0]['name']!r}. Apple product disambiguation (Phase 3.4) must be working."
     )
+
+
+# ── Phase 3.8: Processor classification + merchant separation ─────────────────
+
+def test_processor_receipt_without_recurring_is_one_time(conn):
+    """Cardcom receipt with amount but no recurring signal → one_time_charge, not subscription."""
+    email = _make_email(
+        "cardcom-001",
+        "noreply@cardcom.co.il",
+        "Receipt - NIS 120.00",
+    )
+    result = process_email(conn, email)
+    # email_record must be stored (not IGNORED) — processor rows are never dropped
+    records = get_email_records(conn, include_dismissed=True)
+    assert len(records) == 1, "Processor email must be stored (never IGNORED)"
+
+    rec = records[0]
+    assert rec["is_processor_email"] == 1, "is_processor_email must be 1 for Cardcom"
+    assert rec["payment_processor"] == "Cardcom", f"payment_processor must be 'Cardcom', got {rec['payment_processor']!r}"
+
+    # Must NOT create a subscription
+    subs = get_subscriptions(conn)
+    assert len(subs) == 0, "Processor receipt without recurring signal must not create a subscription"
+
+    # Event type must be one_time_charge or unknown_payment (not subscription_started)
+    assert rec["event_type"] in ("one_time_charge", "unknown_payment"), (
+        f"Processor receipt must become one_time_charge or unknown_payment, got {rec['event_type']!r}"
+    )
+
+    # is_recurring_candidate must NOT be set in payment_events
+    events = get_payment_events(conn)
+    for ev in events:
+        assert ev["is_recurring_candidate"] == 0, (
+            "Processor receipt must not have is_recurring_candidate=1"
+        )
+
+
+def test_processor_canonical_name_not_processor_domain(conn):
+    """Processor email canonical name must NOT be the processor's name — never 'Cardcom'."""
+    email = _make_email(
+        "cardcom-002",
+        "invoice@cardcom.co.il",
+        "Invoice - NIS 50.00",
+    )
+    process_email(conn, email)
+    records = get_email_records(conn, include_dismissed=True)
+    assert len(records) == 1
+    rec = records[0]
+    # The stored canonical name (used as merchant_name in payment_events) must not
+    # be the bare processor name — it should be annotated or set from PDF evidence.
+    events = get_payment_events(conn)
+    if events:
+        assert events[0]["merchant_name"] != "Cardcom", (
+            "Processor domain must not be used as merchant name in payment_events — "
+            "the merchant name should come from PDF/subject or be annotated as '(via Cardcom)'"
+        )
+
+
+def test_processor_review_queue_excluded_by_default(conn):
+    """Processor emails must be excluded from the Review Queue API filter by default."""
+    from backend.db.setup import get_email_records as get_records
+    email = _make_email(
+        "cardcom-003",
+        "billing@cardcom.co.il",
+        "NIS 80.00 payment receipt",
+    )
+    process_email(conn, email)
+
+    # Default (exclude_processor_rows=False): processor row is visible
+    all_records = get_records(conn, include_dismissed=True, exclude_processor_rows=False)
+    assert len(all_records) == 1, "Processor row must be stored"
+
+    # With exclude_processor_rows=True: processor row is hidden from Review Queue
+    queue_records = get_records(conn, include_dismissed=True, exclude_processor_rows=True)
+    assert len(queue_records) == 0, (
+        "Processor row must be hidden from Review Queue (exclude_processor_rows=True)"
+    )
+
+
+def test_processor_with_recurring_signal_not_suppressed(conn):
+    """A processor email with strong recurring wording is NOT forced to one-time."""
+    # RavPass (a processor) sending a renewal email — should be allowed through
+    email = _make_email(
+        "ravpass-renewal-001",
+        "billing@ravpass.co.il",
+        "Renewal - your subscription has been renewed - NIS 50.00/mo",
+    )
+    result = process_email(conn, email)
+    # Disposition may be FLAGGED (Tier 0/processor) but event should not be forced to one_time_charge
+    records = get_email_records(conn, include_dismissed=True)
+    assert len(records) == 1
+    rec = records[0]
+    # renewal pattern detected — event_type should NOT be forced to one_time_charge
+    # (the processor rule only forces one_time when there's NO recurring signal)
+    # A /mo positional pattern is a strong cycle signal which combined with "renewal"
+    # would allow the email through.
+    assert rec["event_type"] != "one_time_charge", (
+        "Processor email with strong renewal wording must not be forced to one_time_charge"
+    )
+
+
+def test_weak_annual_cycle_not_stored_for_tier1(conn):
+    """Tier 1 provider + weak 'annual' from snippet → billing_cycle stored as UNKNOWN, not ANNUAL."""
+    email = _make_email(
+        "spotify-annual-weak",
+        "noreply@email.spotify.com",
+        "Payment Processed",  # No cycle keyword in subject
+        # snippet would carry "annual subscription renews" but we pass it via body_text proxy
+    )
+    # Give it a body_text that mentions annual (weak signal from snippet/body)
+    email_with_body = EmailMetadata(
+        source_message_id="spotify-annual-weak",
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        source_account_email="demo@mock.local",
+        sender_address="noreply@email.spotify.com",
+        sender_name=None,
+        subject="Payment Processed",
+        email_date=datetime.fromisoformat("2025-05-01T08:00:00Z".replace("Z", "+00:00")),
+        snippet="annual subscription renews — save 15%",  # WEAK annual from snippet
+        body_text=None,
+    )
+    process_email(conn, email_with_body)
+    subs = get_subscriptions(conn)
+    if subs:
+        sub = subs[0]
+        assert sub["billing_cycle"] in ("UNKNOWN", None), (
+            f"Tier 1 + weak annual signal → billing_cycle must be UNKNOWN or None, "
+            f"got {sub['billing_cycle']!r}. Weak cycle must not drive confirmed annual cost."
+        )
+
+
+def test_spotify_monthly_strong_wins_over_weak_annual(conn):
+    """Spotify subject /mo (STRONG) beats snippet 'annual subscription' (WEAK)."""
+    email = EmailMetadata(
+        source_message_id="spotify-monthly-wins",
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        source_account_email="demo@mock.local",
+        sender_address="noreply@spotify.com",
+        sender_name=None,
+        subject="Your Spotify Premium receipt - $12.90/mo",
+        email_date=datetime.fromisoformat("2025-05-01T08:00:00Z".replace("Z", "+00:00")),
+        snippet="annual plan available",
+        body_text=None,
+    )
+    process_email(conn, email)
+    subs = get_subscriptions(conn)
+    assert len(subs) == 1
+    sub = subs[0]
+    # Subject has /mo (STRONG MONTHLY) → billing_cycle must be MONTHLY
+    assert sub["billing_cycle"] == "MONTHLY", (
+        f"Spotify with /mo in subject must get MONTHLY cycle even if snippet has 'annual'. "
+        f"Got {sub['billing_cycle']!r}."
+    )
+    # Amount must be extracted correctly
+    assert sub["amount"] == pytest.approx(12.90, abs=0.01)

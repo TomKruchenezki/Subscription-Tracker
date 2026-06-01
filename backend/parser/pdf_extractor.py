@@ -435,9 +435,9 @@ def extract_pdf_fields(pdf_bytes: bytes | None) -> PdfEvidence:
         ev.evidence_reasons.append("cycle_from_period")
     else:
         # Treat PDF text like a snippet (weak cycle keywords allowed with billing context).
-        cycle = detect_cycle("", snippet=text)
-        if cycle != "UNKNOWN":
-            ev.inferred_cycle = cycle
+        cycle_result = detect_cycle("", snippet=text)
+        if cycle_result.cycle != "UNKNOWN":
+            ev.inferred_cycle = cycle_result.cycle
             ev.evidence_reasons.append("cycle_in_pdf")
     if not ev.inferred_cycle:
         ev.missing_evidence.append("no_cycle_in_pdf")

@@ -22,7 +22,9 @@ class SubscriptionResponse(BaseModel):
     trial_ends_at: datetime | None
     # Phase 3.6: detection quality + account alias
     detection_state: str | None = None
-    account_alias: str | None = None  # 8-char SHA-256 prefix of source_account_id
+    account_alias: str | None = None    # 8-char SHA-256 prefix of source_account_id
+    # Phase 3.8: multi-account — list of all unique account aliases from linked email_records
+    account_aliases: list[str] = []
 
 
 class EmailRecordResponse(BaseModel):
@@ -54,6 +56,14 @@ class EmailRecordResponse(BaseModel):
     # Phase 3.7: True when this record has one or more parsed/seen attachments.
     # Detailed attachment + PDF evidence is available at GET /{record_id}/attachments.
     has_attachment: bool = False
+    # Phase 3.8: processor/merchant separation + cycle confidence
+    sender_domain: str | None = None
+    payment_processor: str | None = None      # canonical processor name, e.g. "Cardcom"
+    merchant_name_candidate: str | None = None  # structured candidate — never raw body text
+    is_processor_email: int = 0               # 1 if sender is a known payment processor
+    gmail_account_id: str | None = None       # opaque account identifier
+    cycle_source: str | None = None           # which evidence source produced the cycle
+    cycle_confidence: str | None = None       # STRONG | WEAK | NONE
 
 
 class ScanResult(BaseModel):

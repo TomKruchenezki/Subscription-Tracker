@@ -1,11 +1,41 @@
 # Subscription Tracker — Current State
 
 **Last updated:** 2026-06-01  
-**Phase:** Phase 3.7 complete — safe PDF/attachment receipt & invoice parsing (transient extraction, structured-only persistence, correction-aware). Builds on Phase 3.6 (explainability + correction-awareness).
+**Phase:** Phase 3.8 complete — real-scan cleanup & usability. Builds on Phase 3.7 (safe PDF/attachment parsing).
 
 ---
 
 ## What Works
+
+- **Phase 3.8 features** (complete, 2026-06-01):
+  - **Weak cycle gate.** `detect_cycle()` returns `CycleResult(cycle, cycle_source, cycle_confidence)`.
+    Tier 1 provider + WEAK cycle inference (context-word match) → `billing_cycle` overridden to
+    UNKNOWN. Fixes Spotify ₪12.90 showing as ANNUAL when subject has `/mo` (strong wins).
+    `cycle_confidence` values: `STRONG` (positional patterns) | `WEAK` (context words) | `NONE`.
+  - **Payment processor separation.** `PROCESSOR_DOMAINS` in `sender_list.py` lists known Israeli
+    and global payment processors (Cardcom, Z-Credit, Morning/iCount, RavPass, Grow, Tranzila,
+    Paylink, Meshulam, Priority, Bill.com, QuickBooks, Payoneer). Processor emails:
+    → stored as `one_time_charge` / `unknown_payment` (never IGNORED, never subscriptions)
+    → `is_processor_email=1`, `payment_processor` set, `merchant_name_candidate` from PDF or None
+    → hidden from subscription Review Queue by default (`exclude_processor_rows=True`)
+    → visible in Payment Events; all correction actions available
+    → processor name never used as merchant name
+  - **Migration 012 (schema_version 13):** 7 new columns on `email_records`:
+    `sender_domain`, `payment_processor`, `merchant_name_candidate`,
+    `is_processor_email`, `gmail_account_id`, `cycle_source`, `cycle_confidence`.
+    Pre-3.8 rows have NULL for new columns; re-scan populates them.
+  - **Multi-account visibility.** `account_aliases: list[str]` on subscription API responses
+    (all contributing accounts, not just one). ReviewQueue now has an account dropdown filter
+    (only shown when > 1 alias present). SubscriptionTable shows account badge per row,
+    "multiple accounts" when > 1 alias. PaymentEventsTable already had account_alias.
+  - **Timezone display.** All UI dates use `formatDateLocal()` (browser `Intl.DateTimeFormat`,
+    local timezone). Replaces raw `.slice(0,10)` and `toLocaleDateString()`. Stored UTC unchanged.
+  - **Stale PDF banner fixed.** `PaymentEventsTable` attachment count now only counts events
+    with `needs_attachment_review=1 AND amount IS NULL`. Previously counted all flagged events
+    including those where PDF extraction already filled the amount.
+  - **Validation report Phase 3.8 sections:** processor stats, one-time leakage, PDF extraction
+    rate, weak cycle count, pre-3.8 untracked rows, dual UTC/local timestamp format.
+    `APP_TIMEZONE` env var (default `Asia/Jerusalem`).
 
 - **Phase 3.7 features** (complete, 2026-06-01):
   - **Safe PDF/attachment parsing.** In forensic mode, PDF invoices/receipts on scanned
@@ -114,25 +144,21 @@
 
 ## Known Problems
 
-- **Timezone (display):** timestamps are stored/processed in **UTC**; the UI does not convert to a
-  user-facing timezone (e.g. Asia/Jerusalem), so dates may render in UTC. Display-only issue —
-  stored values are correct. Verify current behavior, then decide/implement a display timezone.
+- **Pre-3.8 email_records** have `gmail_account_id = NULL`. These show as "Unknown account" in the UI. Re-scan to populate.
+- **Multi-account body fetch:** scanning fetches all accounts' message IDs but uses the first account's credentials for body fetch. If a message ID belongs to a second account, body fetch may fail silently. Full per-account routing is future work.
 - Review Queue "Show all" (local view) button only resets local dismissed state — persisted dismissals in DB remain (need separate UI to un-dismiss if desired)
-- Multi-account scanning fetches all accounts' IDs but uses the first account's source for metadata/body fetch. If a message ID belongs to a second account, fetch may fail silently. Full per-account routing needs phase 3.6.
-- Google/Spotify/Zoom may show UNKNOWN until a forensic scan is run with Phase 3.3B+3.4 fixes applied
 - Google canonical name is "Google" (not specific product e.g. "Google One")
 - Spotify plan variants ("Premium Student", "Family") not distinguished
 - Zoom "Payment Processed" billing cycle not detected (no cycle keyword in subject)
-- Subject-line-only amount extraction misses amounts buried in HTML body for some providers → marked as needs_attachment_review=1 in payment_events (Phase 3.5 will extract these)
 - Wolt food delivery receipts (non-subscription one-time orders) may appear as Wolt+ candidates since they come from the same domain. User can delete false positives.
-- Review Queue "Dismiss" action is local-state only — dismissed records reappear on page refresh (no DB persistence for dismissals in Phase 3.4)
+- Image/scanned PDFs are not OCR'd — text-based PDFs only.
 
 ---
 
 ## Test Status
 
-- **579 passed, 1 skipped** (token file test — no `token.json` on disk)
-- Privacy gate: **22 passed, 1 skipped** — all green (4 new Phase 3.7 privacy tests)
+- **617 passed, 1 skipped** (token file test — no `token.json` on disk)
+- Privacy gate: **29 passed, 1 skipped** — all green (7 new Phase 3.8 privacy tests)
 - TypeScript: `npx tsc --noEmit` clean
 - Phase 3.7 tests added (+43): `test_pdf_extractor.py` (22 — extraction, classification,
   failure modes, no-raw-text), `test_detector_pdf.py` (8 — amount fill, attachment

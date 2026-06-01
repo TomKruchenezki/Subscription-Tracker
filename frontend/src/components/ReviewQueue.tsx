@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import type { EmailRecord, CreateSubscriptionRequest, Attachment } from "@/types/api";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDateLocal } from "@/lib/format";
 import { api } from "@/lib/api";
 
 interface Props {
@@ -106,7 +106,7 @@ function ConfirmModal({ record, onSave, onClose }: {
       }}>
         <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600 }}>Confirm as subscription</h3>
         <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)" }}>
-          From: {record.sender_address} · {new Date(record.email_date).toLocaleDateString()}
+          From: {record.sender_address} · {formatDateLocal(record.email_date)}
         </p>
 
         <label style={{ fontSize: "12px", color: "var(--muted)" }}>
@@ -277,7 +277,7 @@ function RecordRow({ record, dismissed, onConfirm, onDismiss, onMarkOneTime }: {
           : (record.event_type ?? "—")}
       </td>
       <td style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-        {new Date(record.email_date).toLocaleDateString()}
+        {formatDateLocal(record.email_date)}
       </td>
       <td>
         {record.amount_extracted != null
@@ -406,8 +406,6 @@ export function ReviewQueue({ records, onRefresh }: Props) {
       .finally(() => setLoadingDismissed(false));
   }, []);
 
-  const categorized = categorize(records);
-
   const handleDismiss = async (id: string) => {
     // Persist to DB first (Phase 3.5). Gracefully degrade if API fails.
     try {
@@ -436,7 +434,16 @@ export function ReviewQueue({ records, onRefresh }: Props) {
     onRefresh();
   };
 
-  const allVisible = records.filter(r => !dismissed.has(r.record_id));
+  const [selectedAccount, setSelectedAccount] = useState<string>("all");
+
+  // Collect unique account aliases present in the records for the filter dropdown.
+  const accountAliases = Array.from(new Set(
+    records.map(r => r.account_alias).filter((a): a is string => Boolean(a))
+  ));
+
+  const allVisible = records
+    .filter(r => !dismissed.has(r.record_id))
+    .filter(r => selectedAccount === "all" || r.account_alias === selectedAccount);
 
   if (loadingDismissed) {
     return <p style={{ color: "var(--muted)", fontSize: "13px" }}>Loading…</p>;
@@ -460,6 +467,8 @@ export function ReviewQueue({ records, onRefresh }: Props) {
     );
   }
 
+  const filteredCategorized = categorize(allVisible);
+
   return (
     <div>
       {confirmRecord && (
@@ -470,11 +479,27 @@ export function ReviewQueue({ records, onRefresh }: Props) {
         />
       )}
 
+      {accountAliases.length > 1 && (
+        <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "12px", color: "var(--muted)" }}>Account:</span>
+          <select
+            value={selectedAccount}
+            onChange={e => setSelectedAccount(e.target.value)}
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "6px", color: "var(--text)", padding: "3px 8px", fontSize: "12px", cursor: "pointer" }}
+          >
+            <option value="all">All accounts</option>
+            {accountAliases.map(alias => (
+              <option key={alias} value={alias}>acct:{alias}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {Object.entries(CATEGORIES).map(([key, cat]) => (
         <Section
           key={key}
           title={cat.label}
-          records={categorized[key] ?? []}
+          records={filteredCategorized[key] ?? []}
           dismissed={dismissed}
           onConfirm={setConfirmRecord}
           onDismiss={handleDismiss}
@@ -482,10 +507,10 @@ export function ReviewQueue({ records, onRefresh }: Props) {
         />
       ))}
 
-      {(categorized.other?.length ?? 0) > 0 && (
+      {(filteredCategorized.other?.length ?? 0) > 0 && (
         <Section
           title="Other"
-          records={categorized.other}
+          records={filteredCategorized.other}
           dismissed={dismissed}
           onConfirm={setConfirmRecord}
           onDismiss={handleDismiss}

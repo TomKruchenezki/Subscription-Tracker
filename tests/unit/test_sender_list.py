@@ -1,6 +1,6 @@
 """Unit tests for sender_list.py — Tier 1/2/excluded domain lookups."""
 import pytest
-from backend.detector.sender_list import get_tier, TIER_1, TIER_2, EXCLUDED
+from backend.detector.sender_list import get_tier, get_processor_name, TIER_1, TIER_2, EXCLUDED, PROCESSOR_DOMAINS
 
 
 # ── Existing Tier 1 domains ───────────────────────────────────────────────────
@@ -142,3 +142,55 @@ def test_wolt_il_is_tier1():
     tier, name = get_tier("wolt.il")
     assert tier == 1, f"wolt.il must be Tier 1, got {tier}"
     assert name == "Wolt+", f"wolt.il canonical name must be 'Wolt+', got {name!r}"
+
+
+# ── Phase 3.8: Processor domain detection ─────────────────────────────────────
+
+@pytest.mark.parametrize("domain, expected_processor", [
+    ("cardcom.co.il",       "Cardcom"),
+    ("z-credit.co.il",      "Z-Credit"),
+    ("zcredit.co.il",       "Z-Credit"),
+    ("morning.co.il",       "Morning"),
+    ("icount.co.il",        "Morning"),
+    ("ravpass.co.il",       "RavPass"),
+    ("grow.me",             "Grow"),
+    ("grow.il",             "Grow"),
+    ("tranzila.com",        "Tranzila"),
+    ("paylink.co.il",       "Paylink"),
+    ("meshulam.co.il",      "Meshulam"),
+])
+def test_processor_domains_detected(domain, expected_processor):
+    """get_processor_name() returns canonical processor name for known processor domains."""
+    assert get_processor_name(domain) == expected_processor
+
+
+def test_non_processor_returns_none():
+    """get_processor_name() returns None for regular subscription providers."""
+    assert get_processor_name("spotify.com") is None
+    assert get_processor_name("netflix.com") is None
+    assert get_processor_name("unknown-startup.io") is None
+
+
+def test_processor_domains_not_in_tier1():
+    """Processor domains must not be in Tier 1 (they are not subscription providers)."""
+    for domain in PROCESSOR_DOMAINS:
+        tier, _ = get_tier(domain)
+        assert tier != 1, (
+            f"Processor domain {domain!r} must not be Tier 1 — "
+            f"processors should not be treated as subscription providers"
+        )
+
+
+def test_processor_domains_not_excluded():
+    """Processor domains must not be in EXCLUDED — their emails should still be stored."""
+    for domain in PROCESSOR_DOMAINS:
+        tier, _ = get_tier(domain)
+        assert tier != -1, (
+            f"Processor domain {domain!r} must not be in EXCLUDED — "
+            f"processor emails should be stored (as one-time/unknown), not dropped"
+        )
+
+
+def test_processor_subdomain_match():
+    """Subdomains of processor domains are also detected."""
+    assert get_processor_name("mail.cardcom.co.il") == "Cardcom"

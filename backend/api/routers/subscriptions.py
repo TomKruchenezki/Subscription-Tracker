@@ -8,6 +8,8 @@ from backend.db.setup import (
     create_subscription_manual, update_subscription_fields, delete_subscription,
     # Phase 3.6
     relabel_provider, merge_subscriptions, account_alias,
+    # Phase 3.8
+    get_subscription_account_aliases,
 )
 from backend.models.subscription import SubscriptionResponse, EmailRecordResponse
 from datetime import datetime
@@ -35,7 +37,28 @@ def _parse_dt(s: str | None) -> datetime | None:
         return None
 
 
-def _row_to_subscription(row) -> dict:
+def _build_subscription_aliases(conn, subscription_ids: list[str]) -> dict[str, list[str]]:
+    """Return {subscription_id: [alias, ...]} for all given IDs in one query."""
+    if not subscription_ids:
+        return {}
+    placeholders = ",".join("?" * len(subscription_ids))
+    rows = conn.execute(
+        f"SELECT subscription_id, source_account_id FROM email_records "
+        f"WHERE subscription_id IN ({placeholders}) AND source_account_id IS NOT NULL",
+        subscription_ids,
+    ).fetchall()
+    result: dict[str, list[str]] = {}
+    seen: dict[str, set[str]] = {}
+    for r in rows:
+        sub_id = r["subscription_id"]
+        alias = account_alias(r["source_account_id"])
+        if alias and alias not in seen.setdefault(sub_id, set()):
+            result.setdefault(sub_id, []).append(alias)
+            seen[sub_id].add(alias)
+    return result
+
+
+def _row_to_subscription(row, aliases: list[str] | None = None) -> dict:
     row_keys = row.keys() if hasattr(row, "keys") else []
     return {
         "subscription_id":  row["subscription_id"],
@@ -57,6 +80,8 @@ def _row_to_subscription(row) -> dict:
         # Phase 3.6: detection quality + account alias
         "detection_state":   row["detection_state"] if "detection_state" in row_keys else None,
         "account_alias":     account_alias(row["source_account_id"] if "source_account_id" in row_keys else None),
+        # Phase 3.8: all account aliases from linked email_records
+        "account_aliases":   aliases if aliases is not None else [],
     }
 
 
@@ -106,6 +131,14 @@ def _row_to_record(row, has_attachment: bool = False) -> dict:
         "suggested_action":     row["suggested_action"] if "suggested_action" in row.keys() else None,
         "detection_state":      row["detection_state"] if "detection_state" in row.keys() else None,
         "account_alias":        account_alias(row["source_account_id"] if "source_account_id" in row.keys() else None),
+        # Phase 3.8: processor/merchant separation + cycle confidence
+        "sender_domain":            row["sender_domain"]            if "sender_domain"            in row.keys() else None,
+        "payment_processor":        row["payment_processor"]        if "payment_processor"        in row.keys() else None,
+        "merchant_name_candidate":  row["merchant_name_candidate"]  if "merchant_name_candidate"  in row.keys() else None,
+        "is_processor_email":       row["is_processor_email"]       if "is_processor_email"       in row.keys() else 0,
+        "gmail_account_id":         row["gmail_account_id"]         if "gmail_account_id"         in row.keys() else None,
+        "cycle_source":             row["cycle_source"]             if "cycle_source"             in row.keys() else None,
+        "cycle_confidence":         row["cycle_confidence"]         if "cycle_confidence"         in row.keys() else None,
     }
 
 
@@ -114,7 +147,9 @@ def list_subscriptions(status: str | None = Query(None)):
     with get_conn() as conn:
         rows = get_subscriptions(conn, status=status,
                                  source_provider=_source_provider_filter())
-    return [SubscriptionResponse(**_row_to_subscription(r)) for r in rows]
+        sub_ids = [r["subscription_id"] for r in rows]
+        aliases_map = _build_subscription_aliases(conn, sub_ids)
+    return [SubscriptionResponse(**_row_to_subscription(r, aliases_map.get(r["subscription_id"], []))) for r in rows]
 
 
 @router.get("/api/subscriptions/{subscription_id}")
@@ -125,9 +160,9 @@ def get_subscription(subscription_id: str):
             raise HTTPException(status_code=404, detail="Subscription not found")
         records = get_records_for_subscription(conn, subscription_id)
         att_ids = _attachment_record_ids(conn)
-
+        sub_aliases = get_subscription_account_aliases(conn, subscription_id)
     return {
-        "subscription": SubscriptionResponse(**_row_to_subscription(sub)),
+        "subscription": SubscriptionResponse(**_row_to_subscription(sub, sub_aliases)),
         "email_records": [
             EmailRecordResponse(**_row_to_record(r, r["record_id"] in att_ids)) for r in records
         ],
@@ -138,6 +173,7 @@ def get_subscription(subscription_id: str):
 def list_email_records(
     disposition: str | None = Query(None),
     include_dismissed: bool = Query(False, description="Include user-dismissed records (default: excluded)"),
+    exclude_processor_rows: bool = Query(True, description="Exclude payment-processor emails from Review Queue (default: True)"),
 ):
     with get_conn() as conn:
         rows = get_email_records(
@@ -145,6 +181,7 @@ def list_email_records(
             disposition=disposition,
             source_provider=_source_provider_filter(),
             include_dismissed=include_dismissed,
+            exclude_processor_rows=exclude_processor_rows,
         )
         att_ids = _attachment_record_ids(conn)
     return [EmailRecordResponse(**_row_to_record(r, r["record_id"] in att_ids)) for r in rows]

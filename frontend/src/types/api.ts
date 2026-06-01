@@ -24,6 +24,8 @@ export interface Subscription {
   // Phase 3.6: detection quality + account visibility
   detection_state: string | null;
   account_alias: string | null;
+  // Phase 3.8: multi-account — all contributing account aliases
+  account_aliases?: string[];
 }
 
 export interface EmailRecord {
@@ -53,6 +55,14 @@ export interface EmailRecord {
   detection_state: string | null;
   account_alias: string | null;   // 8-char SHA-256 prefix — privacy-safe account identifier
   has_attachment?: boolean;       // Phase 3.7: record has ≥1 attachment (see /attachments)
+  // Phase 3.8: processor/merchant separation + cycle confidence
+  sender_domain: string | null;
+  payment_processor: string | null;       // canonical processor name, e.g. "Cardcom"
+  merchant_name_candidate: string | null; // structured candidate — never raw body text
+  is_processor_email: 0 | 1;             // 1 if sender is a known payment processor
+  gmail_account_id: string | null;
+  cycle_source: string | null;
+  cycle_confidence: string | null;        // STRONG | WEAK | NONE
 }
 
 // Phase 3.7: structured PDF-derived evidence (no raw PDF text — never stored)

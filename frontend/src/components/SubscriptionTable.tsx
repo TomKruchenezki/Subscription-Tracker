@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { Subscription, UpdateSubscriptionRequest, CreateSubscriptionRequest } from "@/types/api";
-import { formatMonthly } from "@/lib/format";
+import { formatMonthly, formatDateLocal } from "@/lib/format";
 import { api } from "@/lib/api";
 
 interface Props {
@@ -223,12 +223,20 @@ function SubRow({ sub, onEdit, onDelete }: {
       </td>
       <td>
         <span className={`badge badge-${sub.source_provider.toLowerCase()}`}>{sub.source_provider}</span>
+        {sub.account_aliases && sub.account_aliases.length > 0 && (
+          <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "2px" }}
+               title={sub.account_aliases.join(", ")}>
+            {sub.account_aliases.length > 1
+              ? "multiple accounts"
+              : `acct:${sub.account_aliases[0]}`}
+          </div>
+        )}
       </td>
       <td style={{ color: "var(--muted)" }}>
-        {sub.first_charge_date ? new Date(sub.first_charge_date).toLocaleDateString() : "—"}
+        {formatDateLocal(sub.first_charge_date)}
       </td>
       <td style={{ color: "var(--muted)" }}>
-        {sub.last_charge_date ? new Date(sub.last_charge_date).toLocaleDateString() : "—"}
+        {formatDateLocal(sub.last_charge_date)}
       </td>
       <td>
         <div style={{ display: "flex", gap: "2px" }}>

@@ -7,37 +7,37 @@ Short and actionable. For full status read `docs/CURRENT_STATE.md`; for phase hi
 
 ## Current status
 
-**Phase 3.7 complete** — safe PDF/attachment receipt parsing (transient extraction, structured-only
-persistence, correction-aware). 579 tests pass / 1 skipped; privacy gate green; TypeScript clean.
-Validated with **synthetic PDF fixtures only** — not yet against a real Gmail account.
+**Phase 3.8 complete** — real-scan cleanup & usability. 617 tests pass / 1 skipped; privacy gate
+green (29 tests); TypeScript clean. First real Gmail scan was run (2 accounts, 105 records).
+Phase 3.8 addresses the issues found in that scan.
 
 ## Recommended next task (exact)
 
-**Validate Phase 3.7 against a real Gmail account.** Connect Gmail, run a forensic scan (e.g. 2y),
-then use the `real-scan-triage` skill + `docs/REAL_GMAIL_SCAN_VALIDATION.md`. Confirm:
+**Re-run a real Gmail forensic scan to validate Phase 3.8 improvements.** After the scan:
 
-- An email whose amount is only in a PDF invoice now shows the amount (ReviewQueue 📎 → details).
-- `email_attachments` / `attachment_extracted_fields` populate; **no raw PDF text stored**.
-- `python scripts/validation_report.py` → "ATTACHMENT / PDF COVERAGE" section looks sensible.
-- A PDF receipt with no recurring evidence is **not** auto-confirmed; a refund PDF is not a charge.
-- Mark a PDF-derived event one-time → reprocess → it is not recreated as a subscription.
+1. Confirm Cardcom/Z-Credit/Morning/RavPass/Grow rows are **absent from Review Queue** but visible
+   in Payment Events as `one_time_charge` / `unknown_payment`.
+2. Confirm Spotify is detected as **MONTHLY** (not ANNUAL) with the correct amount.
+3. Confirm all dates display in **browser local timezone** (not UTC offset).
+4. Confirm Review Queue shows account dropdown when > 1 account is present.
+5. Confirm SubscriptionTable shows account badge ("multiple accounts" if applicable).
+6. Run `python scripts/validation_report.py` and check the new Phase 3.8 sections
+   (processor stats, PDF extraction rate, weak cycle, pre-3.8 untracked rows).
+7. Note how many "pre-3.8" rows have `gmail_account_id IS NULL` — these will be populated on re-scan.
 
-- **Likely files:** `backend/sources/gmail.py`, `backend/parser/pdf_extractor.py`,
-  `backend/detector/detector.py`, `scripts/validation_report.py`.
-- **Likely tests:** `tests/unit/test_pdf_extractor.py`, `test_detector_pdf.py`,
-  `test_pdf_corrections.py`, `tests/privacy/`.
+- **Skill:** `real-scan-triage`
+- **Likely files:** `docs/REAL_GMAIL_SCAN_VALIDATION.md`, `scripts/validation_report.py`
 
 ## Top known product gaps
 
-1. **Real-scan validation of PDF extraction** is pending (the task above).
-2. **Timezone display** — timestamps are stored/processed in **UTC**; user-facing display timezone
-   (Asia/Jerusalem) is not handled, so dates may render in UTC. Verify current behavior, then decide
-   and implement a display timezone. (Display-only; do not change stored values.)
+1. **Pre-3.8 email_records** have `gmail_account_id = NULL` — re-scan to populate.
+2. **Multi-account body fetch** — uses first account's credentials for all message IDs.
+   Full per-account routing is future work.
 3. **Provider-specific PDF parsers** — extraction is generic; unusual invoice layouts yield `NO_FIELDS`.
 4. **Image/scanned PDFs** are not OCR'd (text-based PDFs only).
-5. **Full multi-account selector UI** — backend scans all accounts; there is no per-account UI.
-6. **Precision/recall backlog** — one-time purchases leaking into the Review Queue, confidence
-   calibration for known services stuck as FLAGGED. See the backlog in `docs/REAL_GMAIL_SCAN_VALIDATION.md`.
+5. **Confidence calibration** — known services stuck as FLAGGED. Add to Tier 1 or lower threshold.
+6. **Subscription deduplication UI** — if user has same subscription from 2 accounts, they may
+   see duplicate entries. Merge logic is future work.
 
 ## Not scheduled (need explicit re-scoping)
 

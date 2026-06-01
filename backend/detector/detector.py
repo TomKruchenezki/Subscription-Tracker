@@ -9,7 +9,7 @@ import uuid as _uuid
 from dataclasses import dataclass
 
 from backend.models.email_metadata import EmailMetadata
-from backend.detector.sender_list import get_tier
+from backend.detector.sender_list import get_tier, get_processor_name
 from backend.detector.pattern_library import match_pattern, PatternType
 from backend.detector.confidence_scorer import compute_score, score_to_disposition
 from backend.parser import parse_email_metadata
@@ -466,6 +466,7 @@ def process_email(
     # Stage 1: Sender domain lookup
     domain = email.sender_address.split("@", 1)[-1].lower() if "@" in email.sender_address else email.sender_address
     tier, canonical_name_from_tier = get_tier(domain)
+    processor_name = get_processor_name(domain)  # None if not a known payment processor
 
     # Stage 2: Subject pattern match
     pattern = match_pattern(email.subject)
@@ -475,6 +476,23 @@ def process_email(
     amount = parsed["amount"]
     currency = parsed["currency"]    # None when not extracted — preserves native currency (e.g. ILS)
     billing_cycle = parsed["billing_cycle"]
+    cycle_confidence = parsed.get("cycle_confidence", "STRONG")  # STRONG | WEAK | NONE
+
+    cycle_source = parsed.get("cycle_source", "none")
+
+    # Phase 3.8: Weak cycle gate — a context-word guess (e.g. "annual" in snippet) must
+    # not override a known monthly charge for Tier 1 providers.
+    # Tier 1 + WEAK cycle → treat cycle as UNKNOWN (never store the weak guess).
+    # Tier 0/2 + WEAK cycle → cycle kept for display but scored as if UNKNOWN (no bonus).
+    if cycle_confidence == "WEAK" and tier == 1:
+        billing_cycle = "UNKNOWN"
+        cycle_source = "none"
+        cycle_confidence = "NONE"  # already overridden; don't confuse later reads
+
+    # Phase 3.8: Processor flag — set early; merchant resolution deferred until after pdf_ev.
+    is_processor_email = processor_name is not None
+    merchant_name_candidate: str | None = None
+
     # Apple product disambiguation: resolve_sender uses subject to refine "Apple" →
     # "Apple Music", "iCloud+", "App Store", etc. The subject is passed here only
     # for this lookup — it is not stored in payment_events or subscriptions.
@@ -516,8 +534,21 @@ def process_email(
         if billing_cycle in ("UNKNOWN", None) and getattr(pdf_ev, "inferred_cycle", None):
             billing_cycle = pdf_ev.inferred_cycle
 
+    # Phase 3.8: Merchant resolution for processor emails (deferred until after pdf_ev).
+    # Prefer PDF provider → fallback annotation. Never use the processor domain as merchant.
+    if is_processor_email:
+        pdf_provider = pdf_ev is not None and getattr(pdf_ev, "provider", None)
+        if pdf_provider:
+            merchant_name_candidate = pdf_ev.provider
+            canonical_name = merchant_name_candidate
+        else:
+            # No PDF provider — annotate with processor name, leave merchant_name_candidate None
+            canonical_name = f"(via {processor_name})"
+        # Apply any user relabel on top of the above (relabeled is set further down;
+        # this will be overridden by the relabeled check below which runs after this block).
+
     # Stage 4: Confidence scoring
-    score = compute_score(tier, pattern, amount, billing_cycle)
+    score = compute_score(tier, pattern, amount, billing_cycle, cycle_confidence)
 
     # Stage 5: Threshold decision → disposition
     # If sender is blocked, downgrade DETECTED to FLAGGED so subscription creation is skipped.
@@ -530,6 +561,18 @@ def process_email(
         if ((sender_blocked or marked_one_time) and raw_disposition == "DETECTED")
         else raw_disposition
     )
+
+    # Phase 3.8: Processor override — if sender is a payment processor and there is no
+    # strong recurring signal, this is a one-time / unknown payment, not a subscription.
+    # Strong recurring signals: explicit billing period from PDF, "renewal"/"subscription"/
+    # "recurring" in pattern, or a user correction.
+    # Without them: email is stored (never IGNORED) but NOT as a subscription candidate.
+    _processor_has_recurring = (
+        pattern in (PatternType.RENEWAL, PatternType.TRIAL_STARTED, PatternType.TRIAL_END)
+        or (pdf_ev is not None and pdf_ev.has_recurring_evidence())
+        or bool(get_relabeled_name(conn, email.sender_address))  # user confirmed merchant
+    )
+    processor_forced_one_time = is_processor_email and not _processor_has_recurring
 
     logger.info("Processed %s: score=%.2f disposition=%s name=%s",
                 email.source_message_id, score, disposition, canonical_name)
@@ -662,6 +705,10 @@ def process_email(
             tier, pattern, amount, billing_cycle, disposition,
             _needs_attachment_precompute, sender_blocked,
         )
+        # Phase 3.8: processor rows override event_type and detection_state.
+        if processor_forced_one_time:
+            event_type = "one_time_charge" if amount is not None else "unknown_payment"
+            _email_detection_state = "ONE_TIME_PAYMENT"
         new_record_id = insert_email_record(
             conn,
             source_message_id=email.source_message_id,
@@ -686,6 +733,13 @@ def process_email(
             missing_evidence=_missing_evidence,
             suggested_action=_final_suggested,
             detection_state=_email_detection_state,
+            sender_domain=domain,
+            payment_processor=processor_name,
+            merchant_name_candidate=merchant_name_candidate,
+            is_processor_email=int(is_processor_email),
+            gmail_account_id=email.source_account_id,
+            cycle_source=cycle_source,
+            cycle_confidence=cycle_confidence,
         )
         # Write a payment_event only for confirmed financial/lifecycle events.
         # Derive type from email_record event_type (not from pattern) — it already has
@@ -747,6 +801,10 @@ def process_email(
             tier, pattern, amount, billing_cycle, disposition,
             _needs_attachment_precompute, sender_blocked,
         )
+        # Phase 3.8: processor rows override event_type and detection_state.
+        if processor_forced_one_time:
+            event_type = "one_time_charge" if amount is not None else "unknown_payment"
+            _flagged_detection_state = "ONE_TIME_PAYMENT"
         new_record_id = insert_email_record(
             conn,
             source_message_id=email.source_message_id,
@@ -771,6 +829,13 @@ def process_email(
             missing_evidence=_missing_evidence,
             suggested_action=_flagged_suggested,
             detection_state=_flagged_detection_state,
+            sender_domain=domain,
+            payment_processor=processor_name,
+            merchant_name_candidate=merchant_name_candidate,
+            is_processor_email=int(is_processor_email),
+            gmail_account_id=email.source_account_id,
+            cycle_source=cycle_source,
+            cycle_confidence=cycle_confidence,
         )
         # Write payment_event for FLAGGED emails only when a real financial signal exists:
         # - amount must be confirmed (None → no payment value to record)

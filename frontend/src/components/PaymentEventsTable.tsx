@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { PaymentEvent } from "@/types/api";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDateLocal } from "@/lib/format";
 import { api } from "@/lib/api";
 
 /**
@@ -127,7 +127,7 @@ function LinkModal({ event, onSave, onClose }: {
       }}>
         <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600 }}>Link payment event</h3>
         <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)" }}>
-          {event.merchant_name} · {event.event_date.slice(0, 10)}
+          {event.merchant_name} · {formatDateLocal(event.event_date)}
           {event.amount != null && ` · ${formatCurrency(event.amount, event.currency)}`}
         </p>
         <label style={{ fontSize: "12px", color: "var(--muted)" }}>
@@ -176,7 +176,7 @@ function EventRow({ ev, onLink, onUnlink, onMarkOneTime, onRelabel }: {
   return (
     <tr style={{ opacity: ev.user_marked_one_time === 1 ? 0.6 : 1 }}>
       <td style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-        {ev.event_date.slice(0, 10)}
+        {formatDateLocal(ev.event_date)}
         {ev.account_alias && (
           <div style={{ fontSize: "10px", color: "var(--muted)", opacity: 0.6 }}>
             acct:{ev.account_alias}
@@ -204,7 +204,7 @@ function EventRow({ ev, onLink, onUnlink, onMarkOneTime, onRelabel }: {
         {ev.amount != null
           ? formatCurrency(ev.amount, ev.currency)
           : ev.needs_attachment_review
-            ? <span title="Amount is in an attachment (PDF) — not yet extracted" style={{ color: "var(--muted)" }}>📎 —</span>
+            ? <span title="Amount pending PDF extraction" style={{ color: "var(--muted)" }}>📎 —</span>
             : <span style={{ color: "var(--muted)" }}>—</span>}
       </td>
       <td style={{ textAlign: "center" }}>
@@ -276,7 +276,7 @@ export function PaymentEventsTable({ events, onRefresh }: Props) {
     );
   }
 
-  const attachmentCount = events.filter(e => e.needs_attachment_review).length;
+  const attachmentCount = events.filter(e => e.needs_attachment_review && e.amount == null).length;
 
   return (
     <div>
@@ -297,7 +297,7 @@ export function PaymentEventsTable({ events, onRefresh }: Props) {
 
       {attachmentCount > 0 && (
         <p style={{ fontSize: "12px", color: "var(--muted)", marginBottom: "8px" }}>
-          📎 {attachmentCount} event{attachmentCount !== 1 ? "s" : ""} have amount in an attachment (PDF) — not yet extracted.
+          📎 {attachmentCount} event{attachmentCount !== 1 ? "s" : ""} have amounts pending PDF extraction.
         </p>
       )}
 

@@ -77,10 +77,13 @@ def compute_score(
     pattern: PatternType,
     amount: float | None,
     billing_cycle: str,
+    cycle_confidence: str = "STRONG",
 ) -> float:
     """
     Returns a confidence score in [0.0, 1.0].
     tier: 1 (Tier 1 domain), 2 (Tier 2 domain), 0 (no match), -1 (excluded)
+    cycle_confidence: "STRONG" | "WEAK" | "NONE" — weak cycles do not earn the
+        cycle bonus (+0.05), preventing a context-word guess from boosting the score.
     """
     if tier == -1:
         return 0.0
@@ -89,7 +92,9 @@ def compute_score(
     pattern_score = PATTERN_WEIGHTS.get(pattern, 0.0)
 
     amount_delta = _AMOUNT_DELTA if amount is not None else 0.0
-    cycle_delta = _CYCLE_DELTA if billing_cycle != "UNKNOWN" else 0.0
+    # Weak cycle evidence does not earn the cycle bonus — the guess is unreliable.
+    effective_cycle = billing_cycle if cycle_confidence == "STRONG" else "UNKNOWN"
+    cycle_delta = _CYCLE_DELTA if effective_cycle != "UNKNOWN" else 0.0
     parser_score = min(amount_delta + cycle_delta, _PARSER_CAP)
 
     # Parser score only counts when there is subject-level billing evidence.
