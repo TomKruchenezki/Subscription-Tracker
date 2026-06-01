@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routers import health, subscriptions, scan, accounts
 from backend.api.routers import scan_async
 from backend.api.routers import payment_events
+from backend.api.routers import email_records
 
 logger = logging.getLogger(__name__)
 
@@ -48,3 +49,4 @@ app.include_router(scan.router)
 app.include_router(scan_async.router)
 app.include_router(accounts.router)
 app.include_router(payment_events.router)
+app.include_router(email_records.router)

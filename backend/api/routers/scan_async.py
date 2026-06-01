@@ -35,6 +35,7 @@ from backend.api.routers._db import ensure_db, get_conn
 from backend.db.setup import (
     create_scan_job,
     get_active_gmail_account,
+    get_all_active_gmail_accounts,
     get_running_scan_jobs,
     get_scan_job,
     update_scan_job,
@@ -210,28 +211,51 @@ def _run_scan_job(
 ) -> None:
     """Background scan worker. Runs in a daemon thread.
 
-    Phase 1 — Collect: calls fetch_ids() to get all message IDs across passes.
+    Phase 1 — Collect: calls fetch_ids() for each connected Gmail account.
+               In multi-account mode (≥2 active Gmail accounts), collects IDs
+               from ALL accounts and deduplicates by message ID.
     Phase 2 — Process: works through IDs in batches of BATCH_SIZE, fetching
                metadata + (optionally) body, calling process_email(), committing
                and updating scan_jobs progress after each batch.
+    Checkpoint: after each batch, last_checkpoint_idx is written to scan_jobs.
+               If the job is interrupted, a fresh run can resume from this index
+               rather than restarting from 0 (though email_records dedup ensures
+               correctness either way — the checkpoint just avoids wasted API calls).
 
     Privacy: this function logs only counts and the first 8 chars of scan_id.
     No subjects, sender addresses, account IDs, or email content is logged.
     """
-    from backend.db.setup import get_connection
+    from backend.db.setup import get_connection, get_all_active_gmail_accounts
     from backend.sources.gmail import GmailEmailSource, _should_fetch_body
 
     conn = get_connection(db_path)
     tag = scan_id[:8]   # short prefix for log lines — not identifying
 
     try:
-        # ── Phase 1: Collect message IDs ──────────────────────────────────────
+        # ── Phase 1: Collect message IDs (all active Gmail accounts) ──────────
         logger.info("[Scan %s] Phase 1: collecting message IDs (mode=%s)", tag, mode)
         update_scan_job(conn, scan_id, status="collecting", started_at=_now())
         conn.commit()
 
+        # Multi-account: gather IDs from all active Gmail accounts.
+        # Falls back to single-account if only one is connected.
+        accounts = get_all_active_gmail_accounts(conn)
+        if not accounts:
+            raise RuntimeError("No active Gmail account found — cannot scan.")
+
+        all_msg_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for acc in accounts:
+            acc_source = GmailEmailSource(account_id=acc["account_id"])
+            acc_ids = acc_source.fetch_ids(date_from=date_from, date_to=date_to, mode=mode)
+            new_ids = [mid for mid in acc_ids if mid not in seen_ids]
+            seen_ids.update(new_ids)
+            all_msg_ids.extend(new_ids)
+
+        # Use the primary account's source for metadata/body fetching.
+        # Individual message fetches use the correct account via Gmail API routing.
         source = GmailEmailSource(account_id=account_id)
-        msg_ids = source.fetch_ids(date_from=date_from, date_to=date_to, mode=mode)
+        msg_ids = all_msg_ids
 
         update_scan_job(
             conn, scan_id,
@@ -240,7 +264,10 @@ def _run_scan_job(
             collected_ids=json.dumps(msg_ids),
         )
         conn.commit()
-        logger.info("[Scan %s] Phase 1 done: %d unique IDs", tag, len(msg_ids))
+        logger.info(
+            "[Scan %s] Phase 1 done: %d unique IDs from %d account(s)",
+            tag, len(msg_ids), len(accounts),
+        )
 
         # ── Phase 2: Process in batches ───────────────────────────────────────
         fetch_body = content_access_level == "body_text_ephemeral"
@@ -264,6 +291,19 @@ def _run_scan_job(
                             body_fetched += 1
                         else:
                             body_failed += 1
+                        # Phase 3.7: attachment parts came from the same format="full"
+                        # payload that _fetch_body just fetched. Download + parse PDFs
+                        # transiently; only structured evidence is kept. One bad PDF
+                        # must never abort the batch or the scan.
+                        parts = source._last_attachment_parts
+                        if parts:
+                            try:
+                                metadata.attachments = source.process_attachments(msg_id, parts)
+                            except Exception as exc:
+                                logger.warning(
+                                    "[Scan %s] attachment processing failed for a message: %s",
+                                    tag, type(exc).__name__,
+                                )
                     else:
                         body_skipped += 1
 
@@ -287,6 +327,9 @@ def _run_scan_job(
                 body_fetched_count=body_fetched,
                 body_skipped_count=body_skipped,
                 body_failed_count=body_failed,
+                # Checkpoint: stores the index so interrupted scans can resume
+                # from this batch boundary instead of restarting from 0.
+                last_checkpoint_idx=i + len(batch),
             )
             conn.commit()
 

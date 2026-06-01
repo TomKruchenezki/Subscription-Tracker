@@ -825,6 +825,109 @@ def report(db_path: str, use_mock: bool) -> None:
         print(f"  {label:<38} {flag_str:<5}  ({detail})")
 
     print()
+
+    # ── Phase 3.7: Attachment / PDF coverage ────────────────────────────────────
+    # Counts and coded reason tokens only — never raw PDF text (which is never stored).
+    has_att_table = _run(
+        conn, "SELECT name FROM sqlite_master WHERE type='table' AND name='email_attachments'"
+    )
+    if has_att_table:
+        print(_header("ATTACHMENT / PDF COVERAGE"))
+
+        total_att = _run(conn, "SELECT COUNT(*) FROM email_attachments")[0][0]
+        emails_with_att = _run(
+            conn,
+            "SELECT COUNT(DISTINCT email_record_id) FROM email_attachments "
+            "WHERE email_record_id IS NOT NULL",
+        )[0][0]
+        needs_review = _run(
+            conn, "SELECT COUNT(*) FROM payment_events WHERE needs_attachment_review=1"
+        )[0][0]
+        print(f"  Attachments seen:                {total_att}")
+        print(f"  Emails with attachments:         {emails_with_att}")
+        print(f"  Payment events needing review:   {needs_review}")
+
+        print("  By detected type:")
+        for t, c in _run(
+            conn,
+            "SELECT detected_attachment_type, COUNT(*) FROM email_attachments "
+            "GROUP BY detected_attachment_type ORDER BY COUNT(*) DESC",
+        ):
+            print(f"    {str(t):<18} {c}")
+
+        print("  By processing status:")
+        for s, c in _run(
+            conn,
+            "SELECT processing_status, COUNT(*) FROM email_attachments "
+            "GROUP BY processing_status ORDER BY COUNT(*) DESC",
+        ):
+            print(f"    {str(s):<18} {c}")
+
+        af_total = _run(conn, "SELECT COUNT(*) FROM attachment_extracted_fields")[0][0]
+        af_with_amount = _run(
+            conn, "SELECT COUNT(*) FROM attachment_extracted_fields WHERE amount IS NOT NULL"
+        )[0][0]
+        print(f"  PDF evidence rows:               {af_total} ({af_with_amount} with an amount)")
+
+        print("  By extraction status:")
+        for s, c in _run(
+            conn,
+            "SELECT extraction_status, COUNT(*) FROM attachment_extracted_fields "
+            "GROUP BY extraction_status ORDER BY COUNT(*) DESC",
+        ):
+            print(f"    {str(s):<18} {c}")
+
+        def _tally(column: str):
+            counts: dict[str, int] = {}
+            for row in _run(
+                conn,
+                f"SELECT {column} FROM attachment_extracted_fields "
+                f"WHERE {column} IS NOT NULL AND {column} != ''",
+            ):
+                for tok in str(row[0]).split(";"):
+                    if tok:
+                        counts[tok] = counts.get(tok, 0) + 1
+            return sorted(counts.items(), key=lambda kv: -kv[1])
+
+        ev_tally = _tally("evidence_reasons")
+        if ev_tally:
+            print("  PDF-derived evidence by reason:")
+            for tok, c in ev_tally:
+                print(f"    {tok:<30} {c}")
+        pen_tally = _tally("penalty_reasons")
+        if pen_tally:
+            print("  PDF parse / penalty reasons:")
+            for tok, c in pen_tally:
+                print(f"    {tok:<30} {c}")
+
+        failed = _run(
+            conn, "SELECT COUNT(*) FROM email_attachments WHERE processing_status='PARSE_FAILED'"
+        )[0][0]
+        unexplained = _run(
+            conn,
+            "SELECT COUNT(*) FROM attachment_extracted_fields "
+            "WHERE amount IS NOT NULL AND (evidence_reasons IS NULL OR evidence_reasons='')",
+        )[0][0]
+        print(f"  PDF parse failures:              {failed}")
+        print(f"  Unexplained PDF candidates:      {unexplained}")
+
+        corr = _run(
+            conn,
+            "SELECT uc.correction_type, COUNT(*) FROM user_corrections uc "
+            "WHERE uc.email_record_id IN ("
+            "  SELECT DISTINCT email_record_id FROM attachment_extracted_fields "
+            "  WHERE email_record_id IS NOT NULL) "
+            "GROUP BY uc.correction_type ORDER BY COUNT(*) DESC",
+        )
+        if corr:
+            print("  User corrections on PDF-derived rows:")
+            for ct, c in corr:
+                print(f"    {str(ct):<18} {c}")
+        else:
+            print("  User corrections on PDF-derived rows: none")
+
+        print()
+
     conn.close()
 
 

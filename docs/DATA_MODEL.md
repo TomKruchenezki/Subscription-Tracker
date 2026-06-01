@@ -124,6 +124,31 @@ Migrations live in `backend/db/migrations/` as numbered SQL files
 
 ---
 
+## Phase 3.7 tables: `email_attachments` + `attachment_extracted_fields`
+
+Added by `011_attachments.sql` (schema_version 12) for safe PDF/attachment parsing.
+Both store **structured metadata + coded reason tokens only** — never raw PDF text or bytes.
+
+- **`email_attachments`** — per-attachment metadata: `attachment_row_id` (PK),
+  `email_record_id` (FK → `email_records`), `source_message_id`, `source_account_id`,
+  `gmail_attachment_id` (opaque handle, not content), `filename`, `mime_type`, `size_bytes`,
+  `detected_attachment_type` (PDF_INVOICE/PDF_RECEIPT/PDF_OTHER/IMAGE/OTHER/UNSUPPORTED),
+  `processing_status` (PENDING/PARSED/PARSE_FAILED/UNSUPPORTED/SKIPPED), `parser_version`,
+  `created_at`, `updated_at`.
+
+- **`attachment_extracted_fields`** — structured PDF-derived evidence: `field_row_id` (PK),
+  `attachment_row_id` (FK), `email_record_id`, `source_message_id`, `provider`,
+  `product_name`, `amount`, `currency`, `invoice_date`, `payment_date`,
+  `billing_period_start`, `billing_period_end`, `inferred_cycle`, `tax_amount`,
+  `invoice_number`, `subscription_indicators`, `evidence_reasons`, `missing_evidence`,
+  `penalty_reasons` (all coded `;`-joined tokens), `confidence_score`,
+  `extraction_status` (OK/NO_TEXT/NO_FIELDS/FAILED), `parser_version`, `created_at`.
+
+**Prohibited columns** (both tables): any raw text — `*_text`, `body*`, `html`, `snippet`,
+`content`, `payload`. The hard constraint at the top of this file applies to these tables too.
+
+---
+
 ## Indexes
 
 ```sql

@@ -13,7 +13,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from fastapi import Body, HTTPException
-from backend.db.setup import get_payment_events, link_payment_event, unlink_payment_event
+from backend.db.setup import (
+    get_payment_events, link_payment_event, unlink_payment_event,
+    # Phase 3.6
+    mark_one_time, relabel_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +103,69 @@ def unlink_event_from_subscription(
         raise HTTPException(status_code=404, detail="Payment event not found")
     conn.commit()
     return {"event_id": event_id, "subscription_id": None}
+
+
+@router.post("/{event_id}/mark-one-time")
+def mark_event_one_time(
+    event_id: str,
+    conn: sqlite3.Connection = Depends(_get_db),
+) -> dict[str, Any]:
+    """Mark a payment_event as a one-time purchase (not a recurring subscription).
+
+    Persists a MARKED_ONE_TIME correction in user_corrections so the decision
+    survives reprocessing. Sets user_marked_one_time=1 on the payment_event.
+    Privacy-safe: stores only structured IDs and correction_type.
+    """
+    row = conn.execute(
+        """SELECT pe.event_id, pe.source_message_id, er.record_id, er.sender_address
+           FROM payment_events pe
+           LEFT JOIN email_records er ON er.source_message_id = pe.source_message_id
+           WHERE pe.event_id = ?""",
+        (event_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment event not found")
+
+    mark_one_time(
+        conn,
+        email_record_id=row["record_id"],
+        payment_event_id=event_id,
+        sender_address=row["sender_address"],
+    )
+    conn.commit()
+    return {"event_id": event_id, "user_marked_one_time": True}
+
+
+@router.post("/{event_id}/relabel")
+def relabel_payment_event_merchant(
+    event_id: str,
+    new_name: str = Body(..., embed=True),
+    conn: sqlite3.Connection = Depends(_get_db),
+) -> dict[str, Any]:
+    """Relabel the merchant_name on a payment_event and persist a sender-level correction.
+
+    Future scans / reprocessing will use the corrected name for emails from this sender.
+    Privacy-safe: stores only the new canonical name and the sender_address as structured data.
+    """
+    row = conn.execute(
+        """SELECT pe.event_id, pe.merchant_name, er.sender_address
+           FROM payment_events pe
+           LEFT JOIN email_records er ON er.source_message_id = pe.source_message_id
+           WHERE pe.event_id = ?""",
+        (event_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment event not found")
+
+    conn.execute(
+        "UPDATE payment_events SET merchant_name=? WHERE event_id=?",
+        (new_name, event_id),
+    )
+    relabel_provider(
+        conn,
+        new_name=new_name,
+        subscription_id=None,
+        sender_address=row["sender_address"],
+    )
+    conn.commit()
+    return {"event_id": event_id, "merchant_name": new_name}

@@ -1,4 +1,4 @@
-import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus, PaymentEvent, CreateSubscriptionRequest, UpdateSubscriptionRequest } from "@/types/api";
+import type { Subscription, EmailRecord, ScanRequest, ScanResult, Summary, ConnectedAccount, ScanJobStatus, PaymentEvent, CreateSubscriptionRequest, UpdateSubscriptionRequest, UserCorrection, Attachment } from "@/types/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -27,10 +27,13 @@ export const api = {
     apiFetch<{ subscription: Subscription; email_records: EmailRecord[] }>(
       `/api/subscriptions/${id}`
     ),
-  emailRecords: (disposition?: string) =>
-    apiFetch<EmailRecord[]>(
-      `/api/email-records${disposition ? `?disposition=${disposition}` : ""}`
-    ),
+  emailRecords: (disposition?: string, includeDismissed?: boolean) => {
+    const p = new URLSearchParams();
+    if (disposition) p.set("disposition", disposition);
+    if (includeDismissed) p.set("include_dismissed", "true");
+    const qs = p.toString();
+    return apiFetch<EmailRecord[]>(`/api/email-records${qs ? `?${qs}` : ""}`);
+  },
   summary: () => apiFetch<Summary>("/api/summary"),
 
   accounts: () => apiFetch<ConnectedAccount[]>("/api/accounts"),
@@ -96,5 +99,45 @@ export const api = {
     apiFetch<{ event_id: string; subscription_id: null }>(
       `/api/payment-events/${encodeURIComponent(eventId)}/unlink`,
       { method: "POST" }
+    ),
+
+  // Phase 3.5: Review Queue dismiss persistence
+  dismissEmailRecord: (recordId: string) =>
+    apiFetch<{ record_id: string; dismissed: boolean }>(
+      `/api/email-records/${encodeURIComponent(recordId)}/dismiss`,
+      { method: "POST" }
+    ),
+  getDismissedEmailIds: () =>
+    apiFetch<string[]>("/api/email-records/dismissed-ids"),
+
+  // Phase 3.7: attachment + PDF-derived evidence (safe structured fields only)
+  getRecordAttachments: (recordId: string) =>
+    apiFetch<Attachment[]>(`/api/email-records/${encodeURIComponent(recordId)}/attachments`),
+
+  // Phase 3.6: Correction actions
+  markEmailOneTime: (recordId: string) =>
+    apiFetch<{ record_id: string; marked_one_time: boolean }>(
+      `/api/email-records/${encodeURIComponent(recordId)}/mark-one-time`,
+      { method: "POST" }
+    ),
+  markPaymentEventOneTime: (eventId: string) =>
+    apiFetch<{ event_id: string; user_marked_one_time: boolean }>(
+      `/api/payment-events/${encodeURIComponent(eventId)}/mark-one-time`,
+      { method: "POST" }
+    ),
+  relabelSubscription: (id: string, newName: string) =>
+    apiFetch<Subscription>(
+      `/api/subscriptions/${encodeURIComponent(id)}/relabel`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_name: newName }) }
+    ),
+  relabelPaymentEvent: (id: string, newName: string) =>
+    apiFetch<{ event_id: string; merchant_name: string }>(
+      `/api/payment-events/${encodeURIComponent(id)}/relabel`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_name: newName }) }
+    ),
+  mergeSubscription: (sourceId: string, targetId: string) =>
+    apiFetch<{ merged_into: string }>(
+      `/api/subscriptions/${encodeURIComponent(sourceId)}/merge`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_subscription_id: targetId }) }
     ),
 };

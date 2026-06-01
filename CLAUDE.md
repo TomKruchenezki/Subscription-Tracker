@@ -1,11 +1,12 @@
 # Subscription Tracker — CLAUDE.md
 
 A privacy-first, local-first Gmail subscription tracker. Detects recurring subscriptions
-by reading Gmail metadata only (sender, subject, date — never body). All data stays in
-a local SQLite file. No cloud sync, no bank access, no telemetry.
+by reading Gmail metadata (sender, subject, date) and — in forensic mode only — transiently
+parsing email bodies and PDF attachments in memory. No raw body, snippet, or PDF text is
+ever stored. All data stays in a local SQLite file. No cloud sync, no bank access, no telemetry.
 
 **Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 3.4 complete — provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom date range, attachment review flag. See `docs/CURRENT_STATE.md`.
+**Current phase:** Phase 3.7 complete — safe PDF/attachment receipt parsing (transient extraction, structured-only persistence, correction-aware). See `docs/CURRENT_STATE.md`.
 
 ---
 
@@ -17,7 +18,7 @@ must be surfaced immediately and block all other work.
 | # | Rule |
 |---|---|
 | 1 | **Gmail scope is `gmail.readonly` only.** Never add a second scope. |
-| 2 | **Never fetch or store email bodies.** `format=metadata` only in all Gmail API calls. |
+| 2 | **Never store raw email bodies, attachment content, or PDF text.** `format=metadata` is the default. Body/attachment content may be fetched **transiently in forensic mode only** (`format=full` in `_fetch_body()`; `messages.attachments.get` in `_fetch_attachment_bytes()`), parsed in memory, and discarded immediately — never persisted, logged, or returned by any API. Only structured fields + coded reason tokens are stored. |
 | 3 | **Never store OAuth tokens in plaintext.** Keyring or AES-256 encrypted file only. |
 | 4 | **No bank integration code of any kind.** No Plaid, Teller, scraping, or bank credentials. |
 | 5 | **No external data transmission.** No analytics SDKs, no error-reporting services. |
@@ -70,8 +71,10 @@ Both approvals are required for any new `email_records` or `subscriptions` colum
 | 3.1 | payment_events + native currency + subscription linking | **Complete** |
 | 3.3B | payment_events semantics + GET /api/payment-events + frontend PaymentEventsTable + billing cycle fix | **Complete** |
 | 3.4 | Provider expansion (Wolt+, Apple Music disambiguation), manual CRUD, review queue UX, custom scan range, needs_attachment_review flag | **Complete** |
-| 3.5 | PDF/attachment amount extraction, reprocessing mode, user corrections table | Next |
-| Future | AI parsing, bank integration, Outlook/IMAP | Not planned |
+| 3.5 | User corrections (persist dismiss/reject), reprocessing mode, scan checkpoint, multi-account scanning | **Complete** |
+| 3.6 | Explainability (decision_reason / evidence / missing / suggested action), per-row detection_state, correction-awareness (relabel / reject / one-time persist across reprocess), account aliases | **Complete** |
+| 3.7 | Safe PDF/attachment receipt & invoice parsing — transient extraction (pdfminer.six), structured-only persistence (`email_attachments`, `attachment_extracted_fields`), correction-aware | **Complete** |
+| Future | AI parsing, bank integration, Outlook/IMAP, provider-specific parsers, full multi-account UI | Not planned |
 
 **When a phase completes:** Update the Status column above and the **Current phase**
 line at the top of this file. Also update `docs/CURRENT_STATE.md` with the new test
@@ -187,6 +190,17 @@ or `validation_report.py` output — unless the phase was explicitly scoped as b
 and the user confirmed that scope before implementation began. Invoke `product-acceptance-reviewer`
 before marking any feature-phase done.
 
+**Detection features must be explainable and correctable:**
+A detection feature is not complete unless the user can (1) see *why* an item was
+detected/flagged (`decision_reason`, `evidence_summary`), (2) see *what is missing*
+(`missing_evidence`), (3) see *what to do* (`suggested_action`), and (4) correct false
+positives/negatives — with corrections persisting across future scans and reprocessing.
+
+**Attachment/PDF detection** specifically is not complete unless: the user can see *why*
+the attachment mattered; can correct the detected provider/product/status; **raw PDF text
+is never stored** (only structured fields + coded reason tokens); and reprocessing respects
+the user's correction.
+
 ---
 
 ## Context Budget Modes
@@ -231,3 +245,10 @@ Never read or print, under any circumstances:
 - Import Plaid, Teller, or any bank API client
 - Add AI/LLM-based parsing code
 - Increase the scope of data collected beyond what is in `docs/PRIVACY_SECURITY.md`
+- Store raw email body, snippet, HTML, **or raw PDF/attachment text** in any table
+- Add a new third-party dependency without a `privacy-security-reviewer` pass + `pip-audit`
+
+> **Phase 3.7 note:** Downloading attachment **content** via `messages.attachments.get`
+> is now permitted (user-approved), but ONLY inside `_fetch_attachment_bytes()`, ONLY in
+> forensic mode, ONLY transiently — the bytes/text are parsed in memory and discarded.
+> It uses the existing `gmail.readonly` scope (no scope change). Raw PDF text is never stored.

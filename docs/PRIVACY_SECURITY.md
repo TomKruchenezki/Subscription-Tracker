@@ -23,7 +23,7 @@ data collection, storage, or transmission must be reviewed against this document
 
 ## What We Collect
 
-### From Gmail (metadata only — no body, no attachments)
+### From Gmail (metadata — plus transient body/attachment parsing in forensic mode)
 
 | Field | Source | Why |
 |---|---|---|
@@ -32,6 +32,14 @@ data collection, storage, or transmission must be reviewed against this document
 | `subject` | `Subject` header | Extract amount, cycle, and service name |
 | `email_date` | `Date` header | Track renewal timeline |
 | `gmail_message_id` | Message ID | Deduplication only — never shown in UI |
+
+**Forensic mode only** additionally reads, **transiently and in memory**, the email body
+(`format=full` in `_fetch_body()`) and PDF attachments (`messages.attachments.get` in
+`_fetch_attachment_bytes()`, parsed by `pdfminer.six`). The raw body, raw bytes, and
+extracted PDF text are discarded immediately after parsing. Only **structured fields**
+(amount, currency, dates, billing cycle) and **coded reason tokens** are persisted —
+never the raw text. Both use the existing `gmail.readonly` scope (no scope change).
+Attachment metadata stored: filename, mime type, size, detected type, processing status.
 
 ### Derived by the app (computed locally, never transmitted)
 
@@ -56,11 +64,14 @@ data collection, storage, or transmission must be reviewed against this document
 
 ---
 
-## What We Never Collect
+## What We Never Store
 
-- **Email body text** — not fetched, not stored, not logged. The Gmail API call
-  uses `format=metadata` which structurally prevents body content from being returned.
-- **Email attachments or inline images**
+- **Raw email body text** — may be parsed transiently in forensic mode (`_fetch_body()`),
+  but is never stored, logged, or returned by any API. Only a structured extract is used.
+- **Raw PDF/attachment text or bytes** — parsed transiently in forensic mode
+  (`_fetch_attachment_bytes()` → `pdfminer.six`), then discarded. Only structured fields
+  and coded reason tokens are persisted (Phase 3.7). Never the raw text.
+- **Inline images / non-PDF attachment content** — classified by metadata only; not parsed.
 - **CC / BCC recipients**
 - **Email thread history or replies**
 - **Emails that do not match subscription patterns** — only emails that pass the

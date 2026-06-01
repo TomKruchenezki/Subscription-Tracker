@@ -1,8 +1,10 @@
 # Subscription Tracker
 
-A privacy-first, local-first Gmail subscription tracker. Reads Gmail metadata only
-(sender, subject, date — never body or attachments). Detects recurring subscriptions
-and financial events. All data stays in a local SQLite file.
+A privacy-first, local-first Gmail subscription tracker. Reads Gmail metadata
+(sender, subject, date) and — in forensic mode only — transiently parses email bodies
+and PDF attachments in memory to extract billing evidence. No raw body, snippet, or PDF
+text is ever stored. Detects recurring subscriptions and financial events. All data stays
+in a local SQLite file.
 
 ---
 
@@ -47,7 +49,7 @@ Detection pipeline stages:
 
 ---
 
-## Current Features (Phase 3.4 complete)
+## Current Features (Phase 3.7 complete)
 
 ### Backend
 - **6-pass Gmail scan** — domain-based pass 1 (all modes) + keyword passes 2-6 (deep/forensic)
@@ -145,7 +147,7 @@ python -m pytest tests/unit/test_detector.py -q
 python -m pytest tests/ --integration -q
 ```
 
-Current: **515 tests passing, 1 skipped** (privacy token test requires live keyring).
+Current: **579 tests passing, 1 skipped** (privacy token test requires live keyring).
 
 ### TypeScript check
 
@@ -238,7 +240,7 @@ Amazon.com (one-time purchases), eBay, Etsy, Walmart, Shopify
 
 ## Known Limitations
 
-- **Amount in HTML body/PDF** — many receipt emails have amount in HTML body or attached PDF, not in subject. The `needs_attachment_review` flag marks these for future extraction (Phase 3.5).
+- **Amount in PDF invoices** — extracted in forensic mode via transient PDF parsing (Phase 3.7, `pdfminer.six`); only structured fields are stored, never raw PDF text. Image/scanned PDFs are not OCR'd. Provider-specific PDF layouts may not fully parse (generic extraction only).
 - **Hebrew/RTL currency** — `₪` extracted correctly; multi-language subjects are supported.
 - **No Outlook/IMAP** — Gmail only for now (schema supports other providers).
 - **No AI/LLM** — deterministic rules only. Works well for known providers; misses exotic patterns.
@@ -258,9 +260,11 @@ Amazon.com (one-time purchases), eBay, Etsy, Walmart, Shopify
 | 3.1 | payment_events + native currency + subscription linking | Complete |
 | 3.2 | Provider-specific parsers (Hebrew, ILS) | Complete |
 | 3.3A/B | Payment event semantics, billing cycle fixes, frontend PaymentEventsTable | Complete |
-| **3.4** | **Provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom date range** | **Complete** |
-| 3.5 | PDF/attachment amount extraction, reprocessing mode, user corrections table | Planned |
-| Future | Multi-account UI, AI-assisted parsing, Outlook/IMAP | Not planned |
+| 3.4 | Provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom date range | Complete |
+| 3.5 | User corrections (persist dismiss/reject), reprocessing mode, scan checkpoint, multi-account scanning | Complete |
+| 3.6 | Explainability (decision_reason / evidence / missing / suggested), detection_state, correction-awareness, account aliases | Complete |
+| **3.7** | **Safe PDF/attachment receipt parsing — transient extraction, structured-only persistence, correction-aware** | **Complete** |
+| Future | Provider-specific PDF parsers, OCR, full multi-account UI, AI-assisted parsing, Outlook/IMAP | Not planned |
 
 ---
 

@@ -1,11 +1,43 @@
 # Subscription Tracker — Current State
 
-**Last updated:** 2026-05-28  
-**Phase:** Phase 3.4 complete — provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom scan range, needs_attachment_review flag
+**Last updated:** 2026-06-01  
+**Phase:** Phase 3.7 complete — safe PDF/attachment receipt & invoice parsing (transient extraction, structured-only persistence, correction-aware). Builds on Phase 3.6 (explainability + correction-awareness).
 
 ---
 
 ## What Works
+
+- **Phase 3.7 features** (complete, 2026-06-01):
+  - **Safe PDF/attachment parsing.** In forensic mode, PDF invoices/receipts on scanned
+    emails are parsed **transiently**: `messages.attachments.get` → bytes (in memory) →
+    `pdfminer.six` text (in memory) → structured fields → bytes & text discarded. No raw
+    PDF text/bytes are ever stored, logged, or returned. Uses the existing `gmail.readonly`
+    scope — **no scope change**.
+  - **New dependency:** `pdfminer.six==20260107` (pure-Python; deps already pinned).
+  - **Migration 011** (schema_version 12): `email_attachments` (metadata: filename,
+    mime_type, size, detected_attachment_type, processing_status) + `attachment_extracted_fields`
+    (structured: provider, amount, currency, invoice/payment dates, billing period,
+    inferred_cycle, tax, invoice_number, + coded `evidence_reasons`/`missing_evidence`/
+    `penalty_reasons`/`subscription_indicators`, extraction_status). No raw-text column.
+  - **`backend/parser/pdf_extractor.py`** — `classify_attachment()` + `extract_pdf_fields()`
+    (reuses `amount_extractor`/`cycle_detector`; refund/cancellation/trial/auto-renew
+    detection; never raises; never returns raw text).
+  - **Detector integration:** a parsed PDF fills a missing amount/cycle and feeds the
+    Phase 3.6 explanation fields. **Guardrail:** a PDF *receipt alone* never reaches
+    CONFIRMED (no cycle ⇒ no confirmation); a refund PDF never fills a charge amount.
+  - **`gmail.py`:** `_extract_attachment_parts()` (no new call — from the existing
+    `format=full` payload) + `_fetch_attachment_bytes()` (sole `attachments.get` caller,
+    transient, size-guarded) + `process_attachments()` (one bad PDF never aborts a scan).
+  - **Correction-aware:** PDF-derived rows flow through the same user_corrections as
+    everything else. Added `is_event_marked_one_time()` so a one-time mark survives
+    reprocess (no resubscription); reprocess replays stored PDF evidence (no Gmail refetch).
+  - **API:** `GET /api/email-records/{id}/attachments` (structured fields only);
+    `has_attachment` flag on email-record responses.
+  - **Frontend:** ReviewQueue shows a 📎 toggle with inline PDF evidence
+    (amount/provider/cycle/status/reasons); the existing evidence/missing/suggested fields
+    already carry PDF notes. PaymentEventsTable's amount + decision_reason reflect PDF data.
+  - **validation_report.py:** new "ATTACHMENT / PDF COVERAGE" section (counts + coded
+    reasons; parse failures; unexplained PDF candidates; corrections on PDF-derived rows).
 
 - Gmail OAuth (read-only, `gmail.readonly` scope only)
 - Multi-pass forensic scan (6 passes, background job with progress polling)
@@ -29,6 +61,19 @@
   - Subscription linking — `payment_events.subscription_id` foreign key to `subscriptions`
   - One-time payment detection — `is_one_time_candidate` / `is_recurring_candidate` flags
   - Refund and cancellation event types (`refund`, `cancellation`, `unknown_payment`)
+- **Phase 3.5 features** (complete, 2026-05-29):
+  - **user_corrections table** (migration 009): Audit trail for DISMISSED_EMAIL, CONFIRMED_SUB, REJECTED_SUB, RELABELED corrections. Persists dismiss actions across page refreshes.
+  - **email_records.user_dismissed** (migration 009): Fast-filter flag for dismissed Review Queue items. No JOIN needed on hot paths.
+  - **scan_jobs.last_checkpoint_idx** (migration 009): After each batch, stores the last processed index into collected_ids[]. Interrupted forensic scans can resume from the checkpoint rather than restarting from 0.
+  - **POST /api/email-records/{id}/dismiss**: Persists Review Queue dismissal to DB. Sets `user_dismissed=1` and inserts DISMISSED_EMAIL correction.
+  - **GET /api/email-records/dismissed-ids**: Returns list of dismissed record IDs for ReviewQueue.tsx to pre-populate on page load.
+  - **GET /api/email-records?include_dismissed**: Default excludes dismissed records. Pass `include_dismissed=true` to include them (for validation report, etc.).
+  - **ReviewQueue.tsx**: Loads dismissed IDs from DB on mount (useEffect). handleDismiss() persists via API before local state update. Graceful degradation if API fails — still dismisses locally.
+  - **scripts/reprocess_email_records.py**: New script that reads email_records, deletes their payment_events, and re-runs the detector with current rules. Supports --dry-run, --provider, --since flags. Does not fetch from Gmail; body_text/snippet remain None. Privacy-safe: uses only stored metadata.
+  - **Multi-account scanning**: scan_async.py now loops over all active Gmail accounts (get_all_active_gmail_accounts()) instead of just the first one. De-duplicates message IDs across accounts.
+  - **setup.py**: get_all_active_gmail_accounts(), dismiss_email_record(), get_dismissed_email_ids(), insert_user_correction(), get_user_corrections() functions added.
+  - **get_email_records() include_dismissed param**: Default excludes user_dismissed=1 rows from all queries.
+  - **EmailRecordResponse model**: Added user_dismissed field (0 or 1).
 - **Phase 3.4 features** (complete, 2026-05-28):
   - **Wolt/Wolt+ Tier 1**: wolt.com, mail.wolt.com, wolt.fi, wolt.de, wolt.at, wolt.il added to TIER_1 in sender_list.py. wolt.com added to Gmail Pass 1 domain filter — Wolt+ now detected in quick/deep mode (not only forensic).
   - **Apple product disambiguation**: `resolve_sender()` in sender_resolver.py now accepts `subject` parameter. Apple sender + "Apple Music" in subject → "Apple Music"; "iCloud" → "iCloud+"; "App Store" → "App Store"; "iTunes" → "Apple Music"; "Apple TV+" → "Apple TV+"; "Apple One" → "Apple One". detector.py always calls `resolve_sender(sender, subject)` for accurate product names.
@@ -69,6 +114,8 @@
 
 ## Known Problems
 
+- Review Queue "Show all" (local view) button only resets local dismissed state — persisted dismissals in DB remain (need separate UI to un-dismiss if desired)
+- Multi-account scanning fetches all accounts' IDs but uses the first account's source for metadata/body fetch. If a message ID belongs to a second account, fetch may fail silently. Full per-account routing needs phase 3.6.
 - Google/Spotify/Zoom may show UNKNOWN until a forensic scan is run with Phase 3.3B+3.4 fixes applied
 - Google canonical name is "Google" (not specific product e.g. "Google One")
 - Spotify plan variants ("Premium Student", "Family") not distinguished
@@ -81,8 +128,19 @@
 
 ## Test Status
 
-- **515 passed, 1 skipped** (token file test — no `token.json` on disk)
-- Privacy gate: **18 passed, 1 skipped** — all green
+- **579 passed, 1 skipped** (token file test — no `token.json` on disk)
+- Privacy gate: **22 passed, 1 skipped** — all green (4 new Phase 3.7 privacy tests)
+- TypeScript: `npx tsc --noEmit` clean
+- Phase 3.7 tests added (+43): `test_pdf_extractor.py` (22 — extraction, classification,
+  failure modes, no-raw-text), `test_detector_pdf.py` (8 — amount fill, attachment
+  persistence, receipt-only guardrail, refund, idempotent re-scan), `test_pdf_corrections.py`
+  (5 — blocked/relabel/confirmed-not-downgraded/one-time-survives-reprocess/dismissed-skip),
+  `test_api_attachments.py` (4 — attachments endpoint, has_attachment flag, no raw-text keys),
+  plus privacy tests (`test_attachment_no_raw_content.py`, `test_attachments_get_only_in_fetch_attachment_bytes`)
+- Phase 3.5 tests added (21 new tests):
+  - `test_api_email_records.py` — NEW file, 11 tests: dismiss endpoint (200/404), dismissed-ids list, include_dismissed filter, user_dismissed field in response
+  - `test_reprocess_script.py` — NEW file, 5 tests: no email_records duplication, payment_events recreated, dry-run makes no changes, provider filter, no body_text used
+  - `test_database.py` — 5 new tests: dismiss_email_record() sets flag, returns False for nonexistent, inserts correction, get_dismissed_email_ids(), get_email_records() excludes dismissed
 - Phase 3.4 tests added (40 new tests):
   - `test_sender_list.py` — 5 new tests: Wolt Tier 1 coverage (wolt.com, mail.wolt.com, wolt.fi, wolt.de, wolt.il)
   - `test_sender_resolver.py` — 13 new tests: Apple product disambiguation (Apple Music, iCloud+, App Store, iTunes, Apple TV+, Apple One, generic fallback), Wolt sender resolution
@@ -130,6 +188,7 @@ python scripts/validation_report.py
 
 - **Gmail scope:** `gmail.readonly` only — never add a second scope
 - **Body access:** `format=metadata` in `_fetch_metadata()`; `format=full` only in `_fetch_body()` (ephemeral, discarded immediately — never stored or logged)
+- **Attachment access (Phase 3.7):** `messages.attachments.get` only in `_fetch_attachment_bytes()`; bytes + extracted PDF text are processed in memory and discarded immediately. Only structured fields (amount, currency, dates, cycle, coded reason tokens) are stored in `attachment_extracted_fields` — never raw PDF text. Same `gmail.readonly` scope.
 - **Tokens:** keyring or AES-256 encrypted file only — never plaintext
 - **No bank integration** — no Plaid, Teller, scraping, bank credentials
 - **No external telemetry** — no analytics SDKs, no error-reporting services
@@ -190,16 +249,28 @@ cd frontend && npx tsc --noEmit
 python scripts/validation_report.py
 ```
 
+## Phase 3.7 Known Limitations
+
+- **Image/scanned PDFs are not OCR'd** — text-based PDFs only. An image-only PDF is
+  recorded as `processing_status=PARSE_FAILED` / `extraction_status=NO_TEXT` (no crash).
+- **No provider-specific PDF parsers yet** — extraction is generic (labeled totals, dates,
+  billing periods, recurring keywords). Unusual invoice layouts may yield `NO_FIELDS`.
+- **Attachment parsing is forensic-mode only** (piggybacks on the `_fetch_body` payload).
+- **Reprocess replays stored PDF fields only** — raw PDF text is never stored, so
+  parser improvements still require a fresh forensic scan to re-read attachments.
+- Marking a single event one-time blocks subscription creation for that message on
+  reprocess; the existing subscription row (if any) should be deleted by the user.
+
 ## Next Planned Phase
 
-**Phase 3.5** — PDF/attachment amount extraction, reprocessing mode, user corrections table
+**Future** — Provider-specific PDF parsers, OCR for image receipts (optional, local-only),
+full multi-account selector UI, AI/LLM reviewer (only after deterministic rules proven
+insufficient, never sending raw content externally).
 
-Target: extract amounts from payment_events where `needs_attachment_review=1`. These are Tier 1 events where the charge is confirmed but amount is in an attached PDF or HTML body.
-
-Before starting Phase 3.5: run a forensic scan (2y range) with Phase 3.4 fixes applied. Verify:
-- Wolt+ appears in results (recall test)
-- Apple Music shows separately from generic "Apple" (disambiguation test)
-- SubscriptionTable shows Active vs Unconfirmed sections
-- Review Queue is categorized (not a flat list)
-- Custom date range picker appears in scan controls
-- Known Provider Coverage section in validation_report shows expected providers
+**Manual verification (requires a connected Gmail account with PDF invoices):**
+Run a forensic scan, then check:
+- An email whose amount is only in a PDF invoice now shows the amount (ReviewQueue 📎 → details)
+- `email_attachments` / `attachment_extracted_fields` populate; no raw text stored
+- `python scripts/validation_report.py` shows the "ATTACHMENT / PDF COVERAGE" section
+- A PDF receipt with no recurring evidence is NOT auto-confirmed; a refund PDF is not a charge
+- Mark a PDF-derived event one-time → reprocess → it is not recreated as a subscription

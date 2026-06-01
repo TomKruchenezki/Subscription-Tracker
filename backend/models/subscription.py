@@ -20,6 +20,9 @@ class SubscriptionResponse(BaseModel):
     last_charge_date: datetime | None
     cancelled_at: datetime | None
     trial_ends_at: datetime | None
+    # Phase 3.6: detection quality + account alias
+    detection_state: str | None = None
+    account_alias: str | None = None  # 8-char SHA-256 prefix of source_account_id
 
 
 class EmailRecordResponse(BaseModel):
@@ -40,6 +43,17 @@ class EmailRecordResponse(BaseModel):
     billing_period_start: datetime | None
     billing_period_end: datetime | None
     short_evidence: str | None
+    user_dismissed: int = 0  # Phase 3.5: 1 if user dismissed this from Review Queue
+    # Phase 3.6: explanation fields (structured summaries, no raw email content)
+    decision_reason: str | None = None
+    evidence_summary: str | None = None
+    missing_evidence: str | None = None
+    suggested_action: str | None = None
+    detection_state: str | None = None
+    account_alias: str | None = None  # 8-char SHA-256 prefix of source_account_id
+    # Phase 3.7: True when this record has one or more parsed/seen attachments.
+    # Detailed attachment + PDF evidence is available at GET /{record_id}/attachments.
+    has_attachment: bool = False
 
 
 class ScanResult(BaseModel):
@@ -56,5 +70,6 @@ class Summary(BaseModel):
     active_count: int
     detected_count: int
     flagged_count: int
+    unconfirmed_count: int = 0   # Phase 3.4: count of UNKNOWN-status subscriptions
     has_mock_data: bool = False   # True only when USE_MOCK=false and MOCK rows exist in DB
     monthly_costs_by_currency: dict[str, float] = {}   # per-currency monthly totals (Phase 3.3)

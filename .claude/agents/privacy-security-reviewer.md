@@ -44,6 +44,11 @@ For changes in Phase 3.1+ (payment_events, body_text ephemeral, provider parsers
   or `insert_payment_event()`
 - [ ] `format="full"` in `gmail.py` only appears inside `_fetch_body()` — verified by
   `tests/privacy/test_no_body_fetch.py`
+- [ ] **Phase 3.7:** `messages.attachments().get` in `gmail.py` only appears inside
+  `_fetch_attachment_bytes()` — verified by `test_attachments_get_only_in_fetch_attachment_bytes`
+- [ ] PDF bytes/text are transient: `pdf_extractor` returns only structured `PdfEvidence`
+  (no raw-text field); `email_attachments` / `attachment_extracted_fields` store no raw text
+  — verified by `tests/privacy/test_attachment_no_raw_content.py`
 - [ ] `scripts/validation_report.py` does not reference `body_text` in any query or output
 
 ## Regression Detection
@@ -52,10 +57,13 @@ When reviewing a change that touches existing code (not just new code), explicit
 
 1. **Token storage path** — does the change add any code path that could write a token to a
    non-encrypted location (plaintext file, log line, env var, API response)?
-2. **Scope creep** — does the change add any Gmail API call that is NOT `format="metadata"` or
-   the explicitly-approved `format="full"` inside `_fetch_body()`?
-3. **Schema leak** — does the change add any column to `payment_events` or any new table that
-   stores email content fields already prohibited (subject, sender_address, snippet, body_text)?
+2. **Scope creep** — does the change add any Gmail API call that is NOT `format="metadata"`,
+   the approved `format="full"` inside `_fetch_body()`, or the approved
+   `messages.attachments.get` inside `_fetch_attachment_bytes()` (Phase 3.7)? Any attachment
+   download outside `_fetch_attachment_bytes()` is a violation.
+3. **Schema leak** — does the change add any column to `payment_events`, `email_attachments`,
+   `attachment_extracted_fields`, or any new table that stores prohibited content
+   (subject, sender_address, snippet, body_text, raw PDF text)?
 4. **Logging regression** — does the change add any `logger.*()` call that could emit
    `body_text`, `snippet`, or token content as a format argument?
 

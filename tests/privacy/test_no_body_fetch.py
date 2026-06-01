@@ -76,3 +76,32 @@ def test_format_full_only_in_fetch_body():
                         "format='full' is only permitted in _fetch_body(); "
                         "format='raw' and format='minimal' are never permitted."
                     )
+
+
+def test_attachments_get_only_in_fetch_attachment_bytes():
+    """messages.attachments().get downloads attachment content (Phase 3.7).
+
+    It is permitted ONLY inside _fetch_attachment_bytes(), which uses the bytes
+    transiently and never stores them. Any other function referencing .attachments()
+    is a privacy violation.
+    """
+    tree, _ = _get_gmail_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name == "_fetch_attachment_bytes":
+            continue  # the sole permitted location
+        for subnode in ast.walk(node):
+            # Match the Gmail API CALL `...attachments()`, not attribute reads like
+            # `metadata.attachments` (the ephemeral EmailMetadata field).
+            if (
+                isinstance(subnode, ast.Call)
+                and isinstance(subnode.func, ast.Attribute)
+                and subnode.func.attr == "attachments"
+            ):
+                pytest.fail(
+                    f".attachments() called in {node.name}(). "
+                    "Attachment content download is permitted only in "
+                    "_fetch_attachment_bytes() — it must stay isolated and transient."
+                )

@@ -19,3 +19,11 @@ class EmailMetadata:
     # Used only for parser extraction — NEVER stored in the database, NEVER logged,
     # NEVER returned by any API endpoint.
     body_text: str | None = field(default=None)
+    # Phase 3.7: attachment metadata + transient PDF-derived evidence (forensic mode).
+    # Each element is a dict:
+    #   {filename, mime_type, size_bytes, gmail_attachment_id,
+    #    detected_attachment_type, processing_status, evidence}
+    # where "evidence" is an (ephemeral) PdfEvidence or None. The raw PDF bytes/text
+    # that produced "evidence" are NEVER attached here, NEVER stored, NEVER logged.
+    # Only the structured PdfEvidence fields are later persisted by the detector.
+    attachments: list = field(default_factory=list)

@@ -61,17 +61,33 @@ def init_db(db_path: str) -> None:
 def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | None,
                          currency: str, billing_cycle: str, category: str,
                          status: str, source_provider: str, service_url: str | None = None,
-                         next_renewal: str | None = None) -> tuple[str, bool]:
+                         next_renewal: str | None = None,
+                         detection_state: str | None = None,
+                         source_account_id: str | None = None) -> tuple[str, bool]:
     """Insert or update a subscription by canonical name.
     Returns (subscription_id, was_created).
+
+    detection_state: evidence quality (CONFIRMED_ACTIVE, LIKELY_SUBSCRIPTION, etc.).
+    On update, detection_state is only upgraded (CONFIRMED_ACTIVE cannot be downgraded).
+    source_account_id: which Gmail account produced this subscription (multi-account).
     """
+    _DETECTION_RANK = {
+        "CONFIRMED_ACTIVE": 5, "LIKELY_SUBSCRIPTION": 4, "POSSIBLE_SUBSCRIPTION": 3,
+        "NEEDS_ATTACHMENT_REVIEW": 2, "NEEDS_USER_REVIEW": 1,
+    }
+
     now = _now()
     row = conn.execute(
-        "SELECT subscription_id FROM subscriptions WHERE name = ?", (name,)
+        "SELECT subscription_id, detection_state FROM subscriptions WHERE name = ?", (name,)
     ).fetchone()
 
     if row:
         sub_id = row["subscription_id"]
+        existing_ds = row["detection_state"] if "detection_state" in row.keys() else None
+        # Only upgrade detection_state, never downgrade (CONFIRMED_ACTIVE is sticky)
+        new_ds = existing_ds
+        if detection_state and _DETECTION_RANK.get(detection_state, 0) > _DETECTION_RANK.get(existing_ds or "", 0):
+            new_ds = detection_state
         conn.execute(
             """UPDATE subscriptions
                SET amount = COALESCE(?, amount),
@@ -79,10 +95,12 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
                    billing_cycle = CASE WHEN ? != 'UNKNOWN' THEN ? ELSE billing_cycle END,
                    category = ?,
                    status = ?,
+                   detection_state = COALESCE(?, detection_state),
                    last_seen = ?,
                    updated_at = ?
                WHERE subscription_id = ?""",
-            (amount, currency, billing_cycle, billing_cycle, category, status, now, now, sub_id),
+            (amount, currency, billing_cycle, billing_cycle, category, status,
+             new_ds, now, now, sub_id),
         )
         return sub_id, False
     else:
@@ -91,10 +109,11 @@ def upsert_subscription(conn: sqlite3.Connection, *, name: str, amount: float | 
             """INSERT INTO subscriptions
                (subscription_id, name, service_url, amount, currency, billing_cycle,
                 next_renewal, category, status, first_seen, last_seen, source_provider,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, COALESCE(?, 'USD'), ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source_account_id, detection_state, created_at, updated_at)
+               VALUES (?, ?, ?, ?, COALESCE(?, 'USD'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (sub_id, name, service_url, amount, currency, billing_cycle,
-             next_renewal, category, status, now, now, source_provider, now, now),
+             next_renewal, category, status, now, now, source_provider,
+             source_account_id, detection_state, now, now),
         )
         return sub_id, True
 
@@ -327,8 +346,18 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
                          disposition: str, event_type: str | None = None,
                          billing_period_start: str | None = None,
                          billing_period_end: str | None = None,
-                         short_evidence: str | None = None) -> str | None:
-    """Insert an email record. Returns None if source_message_id already exists (dedup)."""
+                         short_evidence: str | None = None,
+                         # Phase 3.6: explanation fields (structured summaries, no raw content)
+                         decision_reason: str | None = None,
+                         evidence_summary: str | None = None,
+                         missing_evidence: str | None = None,
+                         suggested_action: str | None = None,
+                         detection_state: str | None = None) -> str | None:
+    """Insert an email record. Returns None if source_message_id already exists (dedup).
+
+    Phase 3.6 adds 5 optional explanation fields. All must be structured summaries only —
+    no raw subject, body, HTML, snippet, sender address, or PII.
+    """
     existing = conn.execute(
         "SELECT record_id FROM email_records WHERE source_message_id = ?",
         (source_message_id,),
@@ -344,13 +373,17 @@ def insert_email_record(conn: sqlite3.Connection, *, source_message_id: str,
             source_account_id, source_account_email, sender_address, sender_name,
             subject, email_date, amount_extracted, currency_extracted,
             confidence_score, disposition, event_type, billing_period_start,
-            billing_period_end, short_evidence, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            billing_period_end, short_evidence,
+            decision_reason, evidence_summary, missing_evidence, suggested_action,
+            detection_state, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (record_id, subscription_id, source_message_id, source_provider,
          source_account_id, source_account_email, sender_address, sender_name,
          subject, email_date, amount_extracted, currency_extracted,
          confidence_score, disposition, event_type, billing_period_start,
-         billing_period_end, short_evidence, now),
+         billing_period_end, short_evidence,
+         decision_reason, evidence_summary, missing_evidence, suggested_action,
+         detection_state, now),
     )
     return record_id
 
@@ -360,7 +393,14 @@ def get_email_records(
     disposition: str | None = None,
     account_id: str | None = None,
     source_provider: str | None = None,
+    include_dismissed: bool = False,
 ) -> list[sqlite3.Row]:
+    """Return email_records with optional filters.
+
+    By default (include_dismissed=False) user-dismissed records are excluded
+    from results so the Review Queue stays clean after dismissal.
+    Pass include_dismissed=True to include them (e.g. for validation report).
+    """
     conditions = []
     params: list = []
     if disposition:
@@ -372,6 +412,8 @@ def get_email_records(
     if source_provider:
         conditions.append("source_provider = ?")
         params.append(source_provider)
+    if not include_dismissed:
+        conditions.append("user_dismissed = 0")
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return conn.execute(
         f"SELECT * FROM email_records {where} ORDER BY email_date DESC", params
@@ -482,6 +524,19 @@ def get_active_gmail_account(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def get_all_active_gmail_accounts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return ALL active GMAIL accounts ordered by creation date.
+
+    Used for multi-account scanning — iterates over every connected account.
+    Returns a list (empty if no Gmail accounts connected).
+    """
+    return conn.execute(
+        """SELECT * FROM connected_accounts
+           WHERE source_provider = 'GMAIL' AND is_active = 1
+           ORDER BY created_at"""
+    ).fetchall()
+
+
 def upsert_connected_account(
     conn: sqlite3.Connection,
     *,
@@ -584,11 +639,14 @@ def insert_payment_event(
     subscription_id: str | None,
     confidence_score: float,
     needs_attachment_review: int = 0,
+    decision_reason: str | None = None,  # Phase 3.6: structured explanation
+    user_marked_one_time: int = 0,       # Phase 3.7: re-applied on reprocess from corrections
 ) -> None:
     """Insert a payment event. INSERT OR IGNORE on event_id — safe for re-scans.
 
     Privacy: stores NO raw email content. merchant_name is the canonical name from
     sender_list.py (e.g. 'Spotify'), never the raw sender address or email subject.
+    decision_reason is a structured summary (tier + pattern + score), never raw subject.
 
     needs_attachment_review=1 when: amount is NULL + Tier 1 sender + financial pattern.
     Signals that the charge amount is likely in an attached PDF/invoice (Phase 3.5 queue).
@@ -598,12 +656,14 @@ def insert_payment_event(
            (event_id, source_message_id, source_provider, source_account_id,
             event_type, amount, currency, merchant_name, event_date,
             is_recurring_candidate, is_one_time_candidate,
-            subscription_id, confidence_score, needs_attachment_review)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            subscription_id, confidence_score, needs_attachment_review, decision_reason,
+            user_marked_one_time)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (event_id, source_message_id, source_provider, source_account_id,
          event_type, amount, currency, merchant_name, event_date,
          is_recurring_candidate, is_one_time_candidate,
-         subscription_id, confidence_score, needs_attachment_review),
+         subscription_id, confidence_score, needs_attachment_review, decision_reason,
+         user_marked_one_time),
     )
 
 
@@ -651,6 +711,391 @@ def get_payment_events(
         f"SELECT * FROM payment_events {where} ORDER BY event_date DESC LIMIT ?",
         params + [limit],
     ).fetchall()
+
+
+# ── Attachments + PDF-derived evidence (Phase 3.7) ────────────────────────────
+
+def insert_attachment(
+    conn: sqlite3.Connection,
+    *,
+    attachment_row_id: str | None = None,
+    email_record_id: str | None,
+    source_message_id: str,
+    source_account_id: str | None = None,
+    gmail_attachment_id: str | None = None,
+    filename: str | None = None,
+    mime_type: str | None = None,
+    size_bytes: int | None = None,
+    detected_attachment_type: str | None = None,
+    processing_status: str = "PENDING",
+    parser_version: str | None = None,
+) -> str:
+    """Insert an email_attachments row (metadata only — no content). Returns the row id."""
+    row_id = attachment_row_id or str(uuid.uuid4())
+    now = _now()
+    conn.execute(
+        """INSERT INTO email_attachments
+           (attachment_row_id, email_record_id, source_message_id, source_account_id,
+            gmail_attachment_id, filename, mime_type, size_bytes,
+            detected_attachment_type, processing_status, parser_version,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row_id, email_record_id, source_message_id, source_account_id,
+         gmail_attachment_id, filename, mime_type, size_bytes,
+         detected_attachment_type, processing_status, parser_version, now, now),
+    )
+    return row_id
+
+
+def insert_attachment_fields(
+    conn: sqlite3.Connection,
+    *,
+    field_row_id: str | None = None,
+    attachment_row_id: str | None,
+    email_record_id: str | None = None,
+    source_message_id: str | None = None,
+    provider: str | None = None,
+    product_name: str | None = None,
+    amount: float | None = None,
+    currency: str | None = None,
+    invoice_date: str | None = None,
+    payment_date: str | None = None,
+    billing_period_start: str | None = None,
+    billing_period_end: str | None = None,
+    inferred_cycle: str | None = None,
+    tax_amount: float | None = None,
+    invoice_number: str | None = None,
+    subscription_indicators: str | None = None,
+    evidence_reasons: str | None = None,
+    missing_evidence: str | None = None,
+    penalty_reasons: str | None = None,
+    confidence_score: float = 0.0,
+    extraction_status: str | None = None,
+    parser_version: str | None = None,
+) -> str:
+    """Insert a structured PDF-derived evidence row.
+
+    Privacy: stores NO raw PDF text. The *_indicators / *_reasons columns hold SHORT
+    CODED TOKENS (e.g. 'amount_in_pdf;billing_period_found'), joined by the caller —
+    never sentences or text copied from the PDF.
+    """
+    row_id = field_row_id or str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO attachment_extracted_fields
+           (field_row_id, attachment_row_id, email_record_id, source_message_id,
+            provider, product_name, amount, currency, invoice_date, payment_date,
+            billing_period_start, billing_period_end, inferred_cycle, tax_amount,
+            invoice_number, subscription_indicators, evidence_reasons, missing_evidence,
+            penalty_reasons, confidence_score, extraction_status, parser_version, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row_id, attachment_row_id, email_record_id, source_message_id,
+         provider, product_name, amount, currency, invoice_date, payment_date,
+         billing_period_start, billing_period_end, inferred_cycle, tax_amount,
+         invoice_number, subscription_indicators, evidence_reasons, missing_evidence,
+         penalty_reasons, confidence_score, extraction_status, parser_version, _now()),
+    )
+    return row_id
+
+
+def get_attachments_for_record(conn: sqlite3.Connection, email_record_id: str) -> list[sqlite3.Row]:
+    """Return email_attachments rows for an email_record (safe metadata only)."""
+    return conn.execute(
+        "SELECT * FROM email_attachments WHERE email_record_id = ? ORDER BY created_at",
+        (email_record_id,),
+    ).fetchall()
+
+
+def get_attachments_for_message(conn: sqlite3.Connection, source_message_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM email_attachments WHERE source_message_id = ? ORDER BY created_at",
+        (source_message_id,),
+    ).fetchall()
+
+
+def get_attachment_fields_for_record(conn: sqlite3.Connection, email_record_id: str) -> list[sqlite3.Row]:
+    """Return structured PDF-derived evidence rows for an email_record (no raw text)."""
+    return conn.execute(
+        "SELECT * FROM attachment_extracted_fields WHERE email_record_id = ? ORDER BY created_at",
+        (email_record_id,),
+    ).fetchall()
+
+
+def get_attachment_fields_for_message(conn: sqlite3.Connection, source_message_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM attachment_extracted_fields WHERE source_message_id = ? ORDER BY created_at",
+        (source_message_id,),
+    ).fetchall()
+
+
+# ── User corrections (Phase 3.5) ──────────────────────────────────────────────
+
+def insert_user_correction(
+    conn: sqlite3.Connection,
+    *,
+    correction_id: str,
+    email_record_id: str | None,
+    subscription_id: str | None,
+    correction_type: str,
+    new_value: str | None = None,
+    sender_address: str | None = None,  # Phase 3.6: sender-level scope
+) -> None:
+    """Insert a user correction entry (audit trail).
+
+    Privacy: stores only structured IDs and correction_type.
+    No raw email content is stored.
+
+    correction_type values:
+      'DISMISSED_EMAIL' — user dismissed from review queue (not a subscription)
+      'CONFIRMED_SUB'   — user confirmed UNKNOWN subscription as real
+      'REJECTED_SUB'    — user deleted/rejected subscription (false positive)
+      'RELABELED'       — user corrected provider/product canonical name
+    """
+    conn.execute(
+        """INSERT OR IGNORE INTO user_corrections
+           (correction_id, email_record_id, subscription_id, sender_address, correction_type, new_value)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (correction_id, email_record_id, subscription_id, sender_address, correction_type, new_value),
+    )
+
+
+def dismiss_email_record(conn: sqlite3.Connection, record_id: str) -> bool:
+    """Mark an email_record as user-dismissed (sets user_dismissed=1).
+
+    Also inserts a DISMISSED_EMAIL correction for the audit trail.
+    Returns True if the record was found, False if not found.
+
+    Privacy-safe: only touches structured IDs and the user_dismissed flag.
+    No raw email content is read or written.
+    """
+    import uuid as _uuid
+    row = conn.execute(
+        "SELECT record_id FROM email_records WHERE record_id = ?", (record_id,)
+    ).fetchone()
+    if row is None:
+        return False
+
+    conn.execute(
+        "UPDATE email_records SET user_dismissed = 1 WHERE record_id = ?",
+        (record_id,),
+    )
+    correction_id = str(_uuid.uuid4())
+    insert_user_correction(
+        conn,
+        correction_id=correction_id,
+        email_record_id=record_id,
+        subscription_id=None,
+        correction_type="DISMISSED_EMAIL",
+    )
+    return True
+
+
+def get_dismissed_email_ids(
+    conn: sqlite3.Connection,
+    source_provider: str | None = None,
+) -> set[str]:
+    """Return set of record_ids where user_dismissed=1.
+
+    Used by ReviewQueue on page load to filter already-dismissed records.
+    """
+    if source_provider:
+        rows = conn.execute(
+            "SELECT record_id FROM email_records WHERE user_dismissed=1 AND source_provider=?",
+            (source_provider,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT record_id FROM email_records WHERE user_dismissed=1"
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def get_user_corrections(
+    conn: sqlite3.Connection,
+    correction_type: str | None = None,
+    limit: int = 200,
+) -> list[sqlite3.Row]:
+    """Return user corrections, optionally filtered by type."""
+    if correction_type:
+        return conn.execute(
+            "SELECT * FROM user_corrections WHERE correction_type=? ORDER BY created_at DESC LIMIT ?",
+            (correction_type, limit),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM user_corrections ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+# ── Phase 3.6: Explainability + Correction-Awareness ─────────────────────────
+
+import hashlib as _hashlib
+
+
+def account_alias(account_id: str | None) -> str | None:
+    """Return an 8-character SHA-256 prefix of account_id for privacy-safe display.
+
+    The alias is deterministic: same account_id always produces the same alias.
+    It does NOT expose the raw email address — only an irreversible short hash.
+    Used in API responses and the validation report to identify accounts without
+    revealing PII.
+    """
+    if not account_id:
+        return None
+    return _hashlib.sha256(account_id.encode()).hexdigest()[:8]
+
+
+def get_relabeled_name(conn: sqlite3.Connection, sender_address: str) -> str | None:
+    """Return the user-corrected canonical name for this sender, or None.
+
+    If the user relabeled a provider (e.g., "Google" → "Google One"),
+    this returns the corrected name so the detector can use it instead of
+    the auto-resolved canonical name.
+    """
+    row = conn.execute(
+        """SELECT new_value FROM user_corrections
+           WHERE sender_address = ? AND correction_type = 'RELABELED'
+           ORDER BY created_at DESC LIMIT 1""",
+        (sender_address,),
+    ).fetchone()
+    return row["new_value"] if row else None
+
+
+def is_sender_blocked(conn: sqlite3.Connection, sender_address: str) -> bool:
+    """Return True if the user has a REJECTED_SUB correction for this sender.
+
+    When True, the detector should not auto-create a new subscription from emails
+    sent by this address — the user has explicitly said this sender is not a subscription.
+    The email_record is still stored (for audit), but subscription creation is skipped.
+    """
+    row = conn.execute(
+        """SELECT 1 FROM user_corrections
+           WHERE sender_address = ? AND correction_type = 'REJECTED_SUB' LIMIT 1""",
+        (sender_address,),
+    ).fetchone()
+    return row is not None
+
+
+def is_event_marked_one_time(conn: sqlite3.Connection, source_message_id: str) -> bool:
+    """Return True if the user marked this message's event as a one-time payment.
+
+    Resolved via a MARKED_ONE_TIME correction linked (by email_record_id) to an
+    email_record with this source_message_id. This lets reprocessing preserve the
+    user's "not a recurring subscription" decision: when payment_events are deleted and
+    recreated, the detector re-marks the event one-time and creates no subscription.
+    Works identically for PDF-derived and subject/body-derived events.
+    """
+    row = conn.execute(
+        """SELECT 1 FROM user_corrections uc
+           JOIN email_records er ON er.record_id = uc.email_record_id
+           WHERE uc.correction_type = 'MARKED_ONE_TIME'
+             AND er.source_message_id = ? LIMIT 1""",
+        (source_message_id,),
+    ).fetchone()
+    return row is not None
+
+
+def mark_one_time(
+    conn: sqlite3.Connection,
+    *,
+    email_record_id: str | None = None,
+    payment_event_id: str | None = None,
+    sender_address: str | None = None,
+) -> None:
+    """Mark an email_record/payment_event as a one-time payment (not a recurring subscription).
+
+    Inserts a MARKED_ONE_TIME correction in user_corrections and sets
+    payment_events.user_marked_one_time=1 if payment_event_id is given.
+
+    Privacy: stores only structured IDs and correction_type, no raw email content.
+    """
+    correction_id = str(uuid.uuid4())
+    insert_user_correction(
+        conn,
+        correction_id=correction_id,
+        email_record_id=email_record_id,
+        subscription_id=None,
+        sender_address=sender_address,
+        correction_type="MARKED_ONE_TIME",
+    )
+    if payment_event_id:
+        conn.execute(
+            "UPDATE payment_events SET user_marked_one_time=1 WHERE event_id=?",
+            (payment_event_id,),
+        )
+
+
+def relabel_provider(
+    conn: sqlite3.Connection,
+    *,
+    new_name: str,
+    subscription_id: str | None = None,
+    sender_address: str | None = None,
+) -> None:
+    """Relabel a provider/product canonical name and persist the correction.
+
+    Updates the subscription name (if subscription_id given) and inserts a
+    sender-level RELABELED correction so future scans/reprocessing use the
+    corrected name for emails from this sender.
+    """
+    correction_id = str(uuid.uuid4())
+    if subscription_id:
+        conn.execute(
+            "UPDATE subscriptions SET name=?, updated_at=? WHERE subscription_id=?",
+            (new_name, _now(), subscription_id),
+        )
+    insert_user_correction(
+        conn,
+        correction_id=correction_id,
+        email_record_id=None,
+        subscription_id=subscription_id,
+        sender_address=sender_address,
+        correction_type="RELABELED",
+        new_value=new_name,
+    )
+
+
+def merge_subscriptions(
+    conn: sqlite3.Connection,
+    source_subscription_id: str,
+    target_subscription_id: str,
+) -> bool:
+    """Merge source subscription into target. Returns True if source was found.
+
+    Moves all email_records and payment_events from source → target,
+    then deletes the source subscription row. Inserts a MERGED correction
+    for the audit trail.
+
+    Privacy: operates only on structured IDs. No raw content is touched.
+    """
+    source = conn.execute(
+        "SELECT subscription_id FROM subscriptions WHERE subscription_id=?",
+        (source_subscription_id,),
+    ).fetchone()
+    if not source:
+        return False
+
+    conn.execute(
+        "UPDATE email_records SET subscription_id=? WHERE subscription_id=?",
+        (target_subscription_id, source_subscription_id),
+    )
+    conn.execute(
+        "UPDATE payment_events SET subscription_id=? WHERE subscription_id=?",
+        (target_subscription_id, source_subscription_id),
+    )
+    conn.execute(
+        "DELETE FROM subscriptions WHERE subscription_id=?",
+        (source_subscription_id,),
+    )
+    insert_user_correction(
+        conn,
+        correction_id=str(uuid.uuid4()),
+        email_record_id=None,
+        subscription_id=target_subscription_id,
+        sender_address=None,
+        correction_type="MERGED",
+        new_value=source_subscription_id,
+    )
+    return True
 
 
 def _now() -> str:

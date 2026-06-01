@@ -120,16 +120,32 @@ The detection and parsing layers never interact with raw Gmail API responses.
 
 ---
 
+## Transient content fetch (forensic mode only)
+
+Two calls read content beyond headers. Both run **only** in forensic mode, use the
+existing `gmail.readonly` scope (no scope change), and process the result **transiently
+in memory** — the raw content is discarded immediately and is NEVER stored, logged, or
+returned by any API. Each is isolated to a single method (enforced by
+`tests/privacy/test_no_body_fetch.py`).
+
+| Method | Where | What is kept |
+|---|---|---|
+| `messages.get` with `format=full` | `_fetch_body()` only | a plain-text excerpt for parsing (discarded after extraction) |
+| `messages.attachments.get` | `_fetch_attachment_bytes()` only | nothing — bytes → `pdf_extractor` → structured fields, then discarded |
+
+For attachments: `_fetch_body()`'s `format=full` payload already lists attachment PART
+METADATA (filename, mime type, size, opaque `attachmentId`) with **no** new call. Only
+the PDF bytes require `messages.attachments.get`, and only structured fields (amount,
+currency, dates, cycle, coded reason tokens) are persisted — never the raw PDF text.
+
 ## What We Never Call
 
 These API methods are not used and must never be added:
 
 | Method | Reason excluded |
 |---|---|
-| `messages.get` with `format=full` | Returns email body |
 | `messages.get` with `format=raw` | Returns base64-encoded raw email |
 | `messages.get` with `format=minimal` | Still exposes snippet (body excerpt) |
-| `messages.attachments.get` | Returns attachment content |
 | `threads.get` | Returns full thread including bodies |
 | Any method from `gmail.modify` scope | Not accessible — wrong scope |
 | Any method from `gmail.compose` scope | Not accessible — wrong scope |

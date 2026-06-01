@@ -27,6 +27,10 @@ Every item must explicitly PASS or FAIL before the change is considered complete
 - [ ] `body_text` is never passed to any DB insert function (`insert_email_record`, `insert_payment_event`, etc.)
 - [ ] `body_text` is never passed as a logger format argument
 - [ ] `body_text` is never included in any API response model
+- [ ] **Phase 3.7:** `messages.attachments().get` only appears inside `_fetch_attachment_bytes()` (verified by `test_attachments_get_only_in_fetch_attachment_bytes`)
+- [ ] PDF bytes / extracted text are transient — `pdf_extractor.extract_pdf_fields()` returns only structured fields, never raw text; `PdfEvidence` has no raw-text field
+- [ ] `email_attachments` / `attachment_extracted_fields` have no raw-content columns (`*_text`, `body`, `html`, `snippet`, `content`, `payload`) — verified by `tests/privacy/test_attachment_no_raw_content.py`
+- [ ] `*_reasons` / `*_indicators` columns hold short coded tokens, never PDF sentences
 
 ## Token and Secret Safety
 

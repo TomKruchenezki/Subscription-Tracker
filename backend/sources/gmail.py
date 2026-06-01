@@ -117,6 +117,11 @@ class GmailEmailSource(EmailSource):
             )
 
         self._service = build_gmail_service(refresh_token)
+        # Phase 3.7: attachment part metadata extracted during the most recent
+        # _fetch_body() call (from the same format="full" payload). Reset on every
+        # _fetch_body() call; read immediately after by the scan loop. Sequential
+        # use only (one source per scan thread). Holds metadata only — never bytes/text.
+        self._last_attachment_parts: list[dict] = []
         logger.info("GmailEmailSource initialized for account %s", self._account_id)
 
     def fetch(
@@ -182,6 +187,11 @@ class GmailEmailSource(EmailSource):
                 # PRIVACY: body_text is fetched ephemerally — processed in memory,
                 # never stored in the database, never logged, never returned by API.
                 metadata.body_text = self._fetch_body(msg_id)
+                # Phase 3.7: attachment parts came from the same format="full" payload.
+                # Download + parse PDFs transiently; only structured evidence is kept.
+                parts = self._last_attachment_parts
+                if parts:
+                    metadata.attachments = self.process_attachments(msg_id, parts)
             emails.append(metadata)
 
         logger.info("Fetched metadata for %d emails", len(emails))
@@ -291,7 +301,12 @@ class GmailEmailSource(EmailSource):
         The raw Gmail response and all body content are processed in memory and
         discarded immediately — NEVER stored, logged, or returned to callers.
         Only the extracted plain-text excerpt (max 2000 chars) is returned.
+
+        Side effect (Phase 3.7): attachment PART METADATA (filename, mime type, size,
+        opaque attachmentId — never content) from the same payload is stashed on
+        self._last_attachment_parts for the scan loop to read. Reset on every call.
         """
+        self._last_attachment_parts = []
         try:
             msg = self._service.users().messages().get(
                 userId="me",
@@ -299,10 +314,101 @@ class GmailEmailSource(EmailSource):
                 format="full",
             ).execute()
             payload = msg.get("payload", {})
+            self._last_attachment_parts = _extract_attachment_parts(payload)
             return _extract_body_text(payload)
         except Exception as exc:
             logger.warning("Failed to fetch body for %s: %s — skipping body", message_id, exc)
             return None
+
+    @with_retry()
+    def _fetch_attachment_bytes(self, message_id: str, attachment_id: str) -> bytes | None:
+        """Download a single attachment's bytes (Phase 3.7) — the SOLE caller of
+        messages.attachments.get.
+
+        PRIVACY: this is the only method permitted to download attachment content.
+        It uses the existing gmail.readonly scope (no scope change). The bytes are
+        returned for TRANSIENT in-memory parsing only — the caller extracts structured
+        fields and discards them. Bytes are NEVER stored, logged, or returned by any API.
+        Enforced by tests/privacy/test_no_body_fetch.py
+        (test_attachments_get_only_in_fetch_attachment_bytes).
+        """
+        import base64
+        from backend.parser.pdf_extractor import MAX_PDF_BYTES
+
+        try:
+            att = (
+                self._service.users().messages().attachments()
+                .get(userId="me", messageId=message_id, id=attachment_id)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Failed to fetch attachment for %s: %s — skipping", message_id, exc)
+            return None
+
+        data = att.get("data")
+        if not data:
+            return None
+        try:
+            raw = base64.urlsafe_b64decode(data + "==")
+        except Exception:
+            return None
+        if len(raw) > MAX_PDF_BYTES:
+            logger.info("Attachment for %s exceeds size cap — skipping parse", message_id)
+            return None
+        return raw
+
+    def process_attachments(self, message_id: str, attachment_parts: list[dict]) -> list[dict]:
+        """Classify attachments and parse text-based PDFs into structured evidence.
+
+        Returns a list of attachment dicts:
+          {filename, mime_type, size_bytes, gmail_attachment_id,
+           detected_attachment_type, processing_status, evidence}
+        where "evidence" is a transient PdfEvidence (or None). One bad attachment never
+        raises — its processing_status is set to PARSE_FAILED and processing continues.
+        Only PDF types are downloaded/parsed; images and other types are metadata-only.
+        """
+        from backend.parser.pdf_extractor import (
+            classify_attachment, is_parseable_pdf, extract_pdf_fields, MAX_PDF_BYTES,
+        )
+
+        results: list[dict] = []
+        for part in attachment_parts:
+            meta = {
+                "filename": part.get("filename"),
+                "mime_type": part.get("mime_type"),
+                "size_bytes": part.get("size_bytes"),
+                "gmail_attachment_id": part.get("gmail_attachment_id"),
+                "detected_attachment_type": classify_attachment(
+                    part.get("filename"), part.get("mime_type")
+                ),
+                "processing_status": "PENDING",
+                "evidence": None,
+            }
+            dtype = meta["detected_attachment_type"]
+            if not is_parseable_pdf(dtype):
+                meta["processing_status"] = "UNSUPPORTED"
+                results.append(meta)
+                continue
+            size = meta.get("size_bytes") or 0
+            if size and size > MAX_PDF_BYTES:
+                meta["processing_status"] = "SKIPPED"
+                results.append(meta)
+                continue
+            try:
+                pdf_bytes = self._fetch_attachment_bytes(message_id, meta["gmail_attachment_id"])
+                if not pdf_bytes:
+                    meta["processing_status"] = "PARSE_FAILED"
+                else:
+                    ev = extract_pdf_fields(pdf_bytes)
+                    meta["evidence"] = ev
+                    meta["processing_status"] = (
+                        "PARSED" if ev.extraction_status in ("OK", "NO_FIELDS") else "PARSE_FAILED"
+                    )
+            except Exception as exc:  # never let one bad attachment abort the scan
+                logger.warning("Attachment processing error for %s: %s", message_id, type(exc).__name__)
+                meta["processing_status"] = "PARSE_FAILED"
+            results.append(meta)
+        return results
 
     def fetch_ids(
         self,
@@ -471,6 +577,34 @@ def _extract_body_text(payload: dict, max_chars: int = 5000) -> str | None:
         return plain or html_fallback
 
     return None
+
+
+def _extract_attachment_parts(payload: dict) -> list[dict]:
+    """Walk MIME parts of a format='full' payload and collect attachment METADATA only.
+
+    Returns a list of {filename, mime_type, size_bytes, gmail_attachment_id}.
+    No attachment content is read here — gmail_attachment_id is an opaque handle that
+    must be passed to _fetch_attachment_bytes() to actually download the bytes.
+    A part is an attachment when it has a non-empty filename and a body.attachmentId.
+    """
+    out: list[dict] = []
+
+    def _walk(node: dict) -> None:
+        body = node.get("body", {}) or {}
+        filename = node.get("filename") or ""
+        att_id = body.get("attachmentId")
+        if filename and att_id:
+            out.append({
+                "filename": filename,
+                "mime_type": node.get("mimeType"),
+                "size_bytes": body.get("size"),
+                "gmail_attachment_id": att_id,
+            })
+        for child in node.get("parts", []) or []:
+            _walk(child)
+
+    _walk(payload)
+    return out
 
 
 def _b64_decode(data: str) -> str:

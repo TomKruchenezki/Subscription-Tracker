@@ -6,6 +6,9 @@ from backend.db.setup import (
     get_subscriptions, get_subscription_by_id, get_email_records,
     update_subscription_lifecycle, get_summary, init_db, create_scan_job,
     insert_payment_event, get_payment_events,
+    # Phase 3.5
+    dismiss_email_record, get_dismissed_email_ids, insert_user_correction,
+    get_user_corrections, get_all_active_gmail_accounts,
 )
 
 
@@ -834,3 +837,115 @@ def test_get_payment_events_filter_by_recurring(conn):
     recurring = get_payment_events(conn, is_recurring_candidate=1)
     assert len(recurring) == 1
     assert recurring[0]["is_recurring_candidate"] == 1
+
+
+# ── Phase 3.5: User corrections and dismiss ───────────────────────────────────
+
+def _insert_minimal_record(conn, suffix="001", msg_id=None):
+    """Insert a minimal email_record for testing. Returns the generated record_id."""
+    import uuid as _uuid
+    mid = msg_id or f"msg-test-{suffix}"
+    # insert_email_record generates its own UUID record_id — capture and return it
+    record_id = insert_email_record(
+        conn,
+        source_message_id=mid,
+        source_provider="MOCK",
+        source_account_id="mock_default",
+        source_account_email="demo@mock.local",
+        sender_address="billing@test.com",
+        sender_name=None,
+        subject="Test receipt",
+        email_date="2026-01-01T00:00:00Z",
+        amount_extracted=None,
+        currency_extracted=None,
+        confidence_score=0.75,
+        disposition="FLAGGED",
+        event_type=None,
+        subscription_id=None,
+        billing_period_start=None,
+        billing_period_end=None,
+        short_evidence=None,
+    )
+    conn.commit()
+    assert record_id is not None, f"insert_email_record failed for msg {mid}"
+    return record_id
+
+
+def test_dismiss_email_record_sets_flag(conn):
+    """dismiss_email_record() sets user_dismissed=1 on the record."""
+    record_id = _insert_minimal_record(conn)
+    found = dismiss_email_record(conn, record_id)
+    conn.commit()
+    assert found is True, "dismiss_email_record must return True for existing record"
+
+    row = conn.execute(
+        "SELECT user_dismissed FROM email_records WHERE record_id = ?", (record_id,)
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 1, f"user_dismissed must be 1, got {row[0]}"
+
+
+def test_dismiss_nonexistent_record_returns_false(conn):
+    """dismiss_email_record() returns False for nonexistent record."""
+    found = dismiss_email_record(conn, "rec-does-not-exist")
+    assert found is False
+
+
+def test_dismiss_inserts_user_correction(conn):
+    """dismiss_email_record() inserts a DISMISSED_EMAIL entry in user_corrections."""
+    import sqlite3
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_corrections'"
+    ).fetchone()
+    if not has_table:
+        pytest.skip("user_corrections table not present (migration 009 not applied)")
+
+    record_id = _insert_minimal_record(conn, "corr-rec-001")
+    dismiss_email_record(conn, record_id)
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT correction_type FROM user_corrections WHERE email_record_id = ?",
+        (record_id,),
+    ).fetchone()
+    assert row is not None, "DISMISSED_EMAIL correction must be inserted"
+    assert row[0] == "DISMISSED_EMAIL"
+
+
+def test_get_dismissed_email_ids_returns_set(conn):
+    """get_dismissed_email_ids() returns a set of dismissed record_ids."""
+    record_id = _insert_minimal_record(conn, "dismiss-set-001")
+    dismiss_email_record(conn, record_id)
+    conn.commit()
+
+    dismissed = get_dismissed_email_ids(conn)
+    assert record_id in dismissed, (
+        f"Dismissed record {record_id!r} must be in get_dismissed_email_ids() result"
+    )
+
+
+def test_get_email_records_excludes_dismissed_by_default(conn):
+    """get_email_records() excludes user_dismissed=1 records by default."""
+    record_id = _insert_minimal_record(conn, "exclude-rec-001")
+    dismiss_email_record(conn, record_id)
+    conn.commit()
+
+    # Default: excluded
+    records = get_email_records(conn)
+    assert not any(r["record_id"] == record_id for r in records), (
+        "Dismissed record must be excluded from get_email_records() by default"
+    )
+
+    # With include_dismissed=True: included
+    records_all = get_email_records(conn, include_dismissed=True)
+    assert any(r["record_id"] == record_id for r in records_all), (
+        "Dismissed record must be included when include_dismissed=True"
+    )
+
+
+def test_get_all_active_gmail_accounts_returns_list(conn):
+    """get_all_active_gmail_accounts() returns a list (empty if none connected)."""
+    accounts = get_all_active_gmail_accounts(conn)
+    assert isinstance(accounts, list), "Must return a list"
+    # In mock mode, no accounts connected — list is empty
+    assert len(accounts) == 0 or all("account_id" in dict(a) for a in accounts)

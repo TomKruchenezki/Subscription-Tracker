@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import type { EmailRecord, CreateSubscriptionRequest } from "@/types/api";
+import { useState, useEffect } from "react";
+import type { EmailRecord, CreateSubscriptionRequest, Attachment } from "@/types/api";
 import { formatCurrency } from "@/lib/format";
 import { api } from "@/lib/api";
 
@@ -164,27 +164,117 @@ function ConfirmModal({ record, onSave, onClose }: {
 
 // ─── Record row ────────────────────────────────────────────────────────────────
 
-function RecordRow({ record, dismissed, onConfirm, onDismiss }: {
+// Phase 3.7: inline PDF/attachment evidence detail (fetched on demand).
+function AttachmentDetail({ recordId }: { recordId: string }) {
+  const [atts, setAtts] = useState<Attachment[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    api.getRecordAttachments(recordId)
+      .then(setAtts)
+      .catch(() => setError(true));
+  }, [recordId]);
+
+  if (error) return <div style={{ fontSize: "11px", color: "var(--muted)" }}>Could not load attachments.</div>;
+  if (atts === null) return <div style={{ fontSize: "11px", color: "var(--muted)" }}>Loading attachments…</div>;
+  if (atts.length === 0) return <div style={{ fontSize: "11px", color: "var(--muted)" }}>No attachment details.</div>;
+
+  return (
+    <div style={{ marginTop: "4px", padding: "6px 8px", background: "var(--bg, rgba(255,255,255,0.03))", borderRadius: "4px", fontSize: "11px" }}>
+      {atts.map((a) => {
+        const f = a.extracted_fields;
+        return (
+          <div key={a.attachment_row_id} style={{ marginBottom: "4px" }}>
+            <div style={{ color: "var(--text)" }}>
+              📎 {a.filename ?? a.detected_attachment_type ?? "attachment"}
+              {" · "}
+              <span style={{ color: a.processing_status === "PARSED" ? "var(--green, #4ade80)" : "var(--yellow, #facc15)" }}>
+                {a.processing_status.replace(/_/g, " ").toLowerCase()}
+              </span>
+            </div>
+            {f && (
+              <div style={{ color: "var(--muted)", marginLeft: "16px" }}>
+                {f.amount != null && (
+                  <span>{formatCurrency(f.amount, f.currency ?? "USD")}
+                    {f.inferred_cycle && f.inferred_cycle !== "UNKNOWN" ? ` / ${f.inferred_cycle.toLowerCase()}` : ""} · </span>
+                )}
+                {f.provider && <span>{f.provider} · </span>}
+                {f.evidence_reasons && <span style={{ color: "var(--green, #4ade80)" }}>{f.evidence_reasons.replace(/;/g, ", ")}</span>}
+                {f.penalty_reasons && <span style={{ color: "var(--yellow, #facc15)" }}> · {f.penalty_reasons.replace(/;/g, ", ")}</span>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RecordRow({ record, dismissed, onConfirm, onDismiss, onMarkOneTime }: {
   record: EmailRecord;
   dismissed: boolean;
   onConfirm: () => void;
   onDismiss: () => void;
+  onMarkOneTime: () => void;
 }) {
+  const [showAttachments, setShowAttachments] = useState(false);
   if (dismissed) return null;
+
+  const BTN_BASE: React.CSSProperties = {
+    background: "none", border: "1px solid var(--border)", borderRadius: "4px",
+    fontSize: "11px", padding: "2px 7px", cursor: "pointer",
+  };
 
   return (
     <tr>
-      <td style={{ color: "var(--muted)", fontSize: "12px" }}>{record.sender_address}</td>
+      <td style={{ color: "var(--muted)", fontSize: "12px" }}>
+        {record.sender_address}
+        {record.account_alias && (
+          <div style={{ fontSize: "10px", color: "var(--muted)", opacity: 0.6 }}>
+            acct:{record.account_alias}
+          </div>
+        )}
+      </td>
       <td>
         <div>{record.subject}</div>
-        {record.short_evidence && (
+        {/* Phase 3.6: Explanation fields */}
+        {record.evidence_summary && (
+          <div style={{ color: "var(--green, #4ade80)", fontSize: "11px", marginTop: "3px" }}>
+            ✓ {record.evidence_summary}
+          </div>
+        )}
+        {record.missing_evidence && (
+          <div style={{ color: "var(--yellow, #facc15)", fontSize: "11px", marginTop: "1px" }}>
+            ⚠ Missing: {record.missing_evidence}
+          </div>
+        )}
+        {record.suggested_action && (
+          <div style={{ color: "var(--muted)", fontSize: "11px", marginTop: "1px" }}>
+            → {record.suggested_action}
+          </div>
+        )}
+        {!record.evidence_summary && record.short_evidence && (
           <div style={{ color: "var(--muted)", fontSize: "12px", marginTop: "2px" }}>
             {record.short_evidence}
           </div>
         )}
+        {record.has_attachment && (
+          <div style={{ marginTop: "3px" }}>
+            <button
+              onClick={() => setShowAttachments(v => !v)}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: "11px", padding: 0 }}
+              title="View attachment / PDF evidence"
+            >
+              📎 {showAttachments ? "Hide attachment details" : "View attachment details"}
+            </button>
+            {showAttachments && <AttachmentDetail recordId={record.record_id} />}
+          </div>
+        )}
       </td>
       <td style={{ color: "var(--muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
-        {record.event_type ?? "—"}
+        {record.detection_state
+          ? record.detection_state.replace(/_/g, " ").toLowerCase()
+          : (record.event_type ?? "—")}
       </td>
       <td style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
         {new Date(record.email_date).toLocaleDateString()}
@@ -208,20 +298,27 @@ function RecordRow({ record, dismissed, onConfirm, onDismiss }: {
         </span>
       </td>
       <td>
-        <div style={{ display: "flex", gap: "4px", whiteSpace: "nowrap" }}>
+        <div style={{ display: "flex", gap: "4px", whiteSpace: "nowrap", flexWrap: "wrap" }}>
           <button
-            style={{ background: "none", border: "1px solid var(--border)", borderRadius: "4px", fontSize: "11px", padding: "2px 7px", cursor: "pointer", color: "var(--accent)" }}
+            style={{ ...BTN_BASE, color: "var(--accent)" }}
             onClick={onConfirm}
             title="Add as subscription"
           >
             ✓ Confirm
           </button>
           <button
-            style={{ background: "none", border: "1px solid var(--border)", borderRadius: "4px", fontSize: "11px", padding: "2px 7px", cursor: "pointer", color: "var(--muted)" }}
+            style={{ ...BTN_BASE, color: "var(--muted)" }}
             onClick={onDismiss}
-            title="Dismiss from view"
+            title="Dismiss from view (persisted)"
           >
             ✕ Dismiss
+          </button>
+          <button
+            style={{ ...BTN_BASE, color: "var(--muted)" }}
+            onClick={onMarkOneTime}
+            title="Mark as one-time payment — not a subscription"
+          >
+            1× One-time
           </button>
         </div>
       </td>
@@ -231,12 +328,13 @@ function RecordRow({ record, dismissed, onConfirm, onDismiss }: {
 
 // ─── Section ───────────────────────────────────────────────────────────────────
 
-function Section({ title, records, dismissed, onConfirm, onDismiss }: {
+function Section({ title, records, dismissed, onConfirm, onDismiss, onMarkOneTime }: {
   title: string;
   records: EmailRecord[];
   dismissed: Set<string>;
   onConfirm: (r: EmailRecord) => void;
   onDismiss: (id: string) => void;
+  onMarkOneTime: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   const visible = records.filter(r => !dismissed.has(r.record_id));
@@ -280,6 +378,7 @@ function Section({ title, records, dismissed, onConfirm, onDismiss }: {
                 dismissed={dismissed.has(r.record_id)}
                 onConfirm={() => onConfirm(r)}
                 onDismiss={() => onDismiss(r.record_id)}
+                onMarkOneTime={() => onMarkOneTime(r.record_id)}
               />
             ))}
           </tbody>
@@ -292,23 +391,56 @@ function Section({ title, records, dismissed, onConfirm, onDismiss }: {
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function ReviewQueue({ records, onRefresh }: Props) {
+  // Dismissed set is seeded from DB on mount (Phase 3.5 — persists across refreshes).
+  // Initially populated with IDs already dismissed in previous sessions.
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [loadingDismissed, setLoadingDismissed] = useState(true);
   const [confirmRecord, setConfirmRecord] = useState<EmailRecord | null>(null);
+
+  // On mount: seed dismissed set from DB so previously dismissed
+  // records stay hidden after page reload (Phase 3.5 persistence).
+  useEffect(() => {
+    api.getDismissedEmailIds()
+      .then(ids => setDismissed(new Set(ids)))
+      .catch(() => {/* graceful degradation: dismissed set stays empty */})
+      .finally(() => setLoadingDismissed(false));
+  }, []);
 
   const categorized = categorize(records);
 
-  const handleDismiss = (id: string) => {
+  const handleDismiss = async (id: string) => {
+    // Persist to DB first (Phase 3.5). Gracefully degrade if API fails.
+    try {
+      await api.dismissEmailRecord(id);
+    } catch (e) {
+      // Non-fatal: still dismiss locally even if persist fails
+      console.error("Failed to persist dismissal:", e);
+    }
+    setDismissed(prev => new Set([...prev, id]));
+  };
+
+  const handleMarkOneTime = async (id: string) => {
+    try {
+      await api.markEmailOneTime(id);
+    } catch (e) {
+      console.error("Failed to mark as one-time:", e);
+    }
+    // Treat one-time marked items like dismissed — hide from review queue
     setDismissed(prev => new Set([...prev, id]));
   };
 
   const handleSaveConfirm = async (req: CreateSubscriptionRequest) => {
     await api.createSubscription(req);
-    if (confirmRecord) handleDismiss(confirmRecord.record_id);
+    if (confirmRecord) await handleDismiss(confirmRecord.record_id);
     setConfirmRecord(null);
     onRefresh();
   };
 
   const allVisible = records.filter(r => !dismissed.has(r.record_id));
+
+  if (loadingDismissed) {
+    return <p style={{ color: "var(--muted)", fontSize: "13px" }}>Loading…</p>;
+  }
 
   if (allVisible.length === 0 && records.length === 0) {
     return <p style={{ color: "var(--muted)" }}>No flagged records — inbox looks clean.</p>;
@@ -322,7 +454,7 @@ export function ReviewQueue({ records, onRefresh }: Props) {
           style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", textDecoration: "underline", padding: 0, fontSize: "inherit" }}
           onClick={() => setDismissed(new Set())}
         >
-          Show all
+          Show all (local view only)
         </button>
       </p>
     );
@@ -346,6 +478,7 @@ export function ReviewQueue({ records, onRefresh }: Props) {
           dismissed={dismissed}
           onConfirm={setConfirmRecord}
           onDismiss={handleDismiss}
+          onMarkOneTime={handleMarkOneTime}
         />
       ))}
 
@@ -356,6 +489,7 @@ export function ReviewQueue({ records, onRefresh }: Props) {
           dismissed={dismissed}
           onConfirm={setConfirmRecord}
           onDismiss={handleDismiss}
+          onMarkOneTime={handleMarkOneTime}
         />
       )}
     </div>

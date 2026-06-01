@@ -9,6 +9,13 @@ google-auth-oauthlib==1.2.1
 google-api-python-client==2.154.0
 keyring==25.6.0
 
+# Phase 3.7: Safe PDF/attachment receipt parsing.
+# Pure-Python PDF text extraction (no native/system deps). Used ONLY transiently:
+# attachment bytes -> text in memory -> structured fields extracted -> text discarded.
+# Raw PDF text is NEVER persisted, logged, or returned by any API. Depends on
+# cryptography (already pinned above) and charset-normalizer.
+pdfminer.six==20260107
+
 # Testing (also installed separately by CI)
 pytest==8.3.4
 pytest-cov==6.0.0

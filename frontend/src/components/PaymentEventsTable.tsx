@@ -46,6 +46,40 @@ interface Props {
   onRefresh: () => void;
 }
 
+// ─── Relabel modal ─────────────────────────────────────────────────────────────
+
+function RelabelModal({ event, onSave, onClose }: {
+  event: PaymentEvent;
+  onSave: (newName: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(event.merchant_name);
+  const [saving, setSaving] = useState(false);
+  const INPUT_S: React.CSSProperties = {
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "4px",
+    color: "var(--text)", padding: "4px 8px", fontSize: "13px", width: "100%", boxSizing: "border-box",
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "24px", width: "360px", maxWidth: "90vw", display: "flex", flexDirection: "column", gap: "12px" }}>
+        <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600 }}>Relabel provider</h3>
+        <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)" }}>Current: {event.merchant_name}</p>
+        <label style={{ fontSize: "12px", color: "var(--muted)" }}>
+          New name
+          <input style={INPUT_S} value={name} onChange={e => setName(e.target.value)} autoFocus />
+        </label>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+          <button style={{ background: "none", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 14px", cursor: "pointer", color: "var(--text)", fontSize: "13px" }} onClick={onClose}>Cancel</button>
+          <button className="primary" style={{ fontSize: "13px" }} disabled={saving}
+            onClick={async () => { setSaving(true); await onSave(name); onClose(); }}>
+            {saving ? "Saving…" : "Relabel"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Link modal ────────────────────────────────────────────────────────────────
 
 function LinkModal({ event, onSave, onClose }: {
@@ -125,32 +159,47 @@ function LinkModal({ event, onSave, onClose }: {
 
 // ─── Event row ────────────────────────────────────────────────────────────────
 
-function EventRow({ ev, onLink, onUnlink }: {
+function EventRow({ ev, onLink, onUnlink, onMarkOneTime, onRelabel }: {
   ev: PaymentEvent;
   onLink: () => void;
   onUnlink: () => void;
+  onMarkOneTime: () => void;
+  onRelabel: () => void;
 }) {
-  const BTN = {
-    background: "none",
-    border: "1px solid var(--border)",
-    borderRadius: "4px",
-    fontSize: "11px",
-    padding: "2px 6px",
-    cursor: "pointer",
-    color: "var(--muted)",
+  const BTN: React.CSSProperties = {
+    background: "none", border: "1px solid var(--border)", borderRadius: "4px",
+    fontSize: "11px", padding: "2px 6px", cursor: "pointer", color: "var(--muted)",
   };
 
+  const isOneTime = ev.user_marked_one_time === 1 || ev.is_one_time_candidate === 1;
+
   return (
-    <tr>
+    <tr style={{ opacity: ev.user_marked_one_time === 1 ? 0.6 : 1 }}>
       <td style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
         {ev.event_date.slice(0, 10)}
+        {ev.account_alias && (
+          <div style={{ fontSize: "10px", color: "var(--muted)", opacity: 0.6 }}>
+            acct:{ev.account_alias}
+          </div>
+        )}
       </td>
       <td>
         <span style={{ color: EVENT_TYPE_COLORS[ev.event_type] ?? "var(--text)", fontSize: "13px" }}>
           {EVENT_TYPE_LABELS[ev.event_type] ?? ev.event_type}
         </span>
+        {ev.user_marked_one_time === 1 && (
+          <span style={{ fontSize: "10px", color: "var(--muted)", marginLeft: "6px" }}>1× one-time</span>
+        )}
       </td>
-      <td style={{ fontWeight: 500 }}>{ev.merchant_name}</td>
+      <td style={{ fontWeight: 500 }}>
+        {ev.merchant_name}
+        {ev.decision_reason && (
+          <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "2px", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+               title={ev.decision_reason}>
+            {ev.decision_reason}
+          </div>
+        )}
+      </td>
       <td style={{ whiteSpace: "nowrap" }}>
         {ev.amount != null
           ? formatCurrency(ev.amount, ev.currency)
@@ -162,7 +211,7 @@ function EventRow({ ev, onLink, onUnlink }: {
         {ev.is_recurring_candidate ? "✓" : <span style={{ color: "var(--muted)" }}>—</span>}
       </td>
       <td style={{ textAlign: "center" }}>
-        {ev.is_one_time_candidate ? "✓" : <span style={{ color: "var(--muted)" }}>—</span>}
+        {isOneTime ? "✓" : <span style={{ color: "var(--muted)" }}>—</span>}
       </td>
       <td style={{ textAlign: "center" }}>
         {ev.subscription_id
@@ -173,12 +222,16 @@ function EventRow({ ev, onLink, onUnlink }: {
         {Math.round(ev.confidence_score * 100)}%
       </td>
       <td>
-        <div style={{ display: "flex", gap: "3px", whiteSpace: "nowrap" }}>
+        <div style={{ display: "flex", gap: "3px", whiteSpace: "nowrap", flexWrap: "wrap" }}>
           {ev.subscription_id ? (
             <button style={BTN} onClick={onUnlink} title="Remove subscription link">Unlink</button>
           ) : (
             <button style={{ ...BTN, color: "var(--accent)" }} onClick={onLink} title="Link to subscription">Link</button>
           )}
+          {ev.user_marked_one_time !== 1 && (
+            <button style={BTN} onClick={onMarkOneTime} title="Mark as one-time payment">1×</button>
+          )}
+          <button style={BTN} onClick={onRelabel} title="Relabel provider name">✎</button>
         </div>
       </td>
     </tr>
@@ -189,6 +242,7 @@ function EventRow({ ev, onLink, onUnlink }: {
 
 export function PaymentEventsTable({ events, onRefresh }: Props) {
   const [linkEvent, setLinkEvent] = useState<PaymentEvent | null>(null);
+  const [relabelEvent, setRelabelEvent] = useState<PaymentEvent | null>(null);
 
   const handleLink = async (eventId: string, subscriptionId: string) => {
     await api.linkPaymentEvent(eventId, subscriptionId);
@@ -197,6 +251,20 @@ export function PaymentEventsTable({ events, onRefresh }: Props) {
 
   const handleUnlink = async (eventId: string) => {
     await api.unlinkPaymentEvent(eventId);
+    onRefresh();
+  };
+
+  const handleMarkOneTime = async (eventId: string) => {
+    try {
+      await api.markPaymentEventOneTime(eventId);
+      onRefresh();
+    } catch (e) {
+      console.error("Failed to mark as one-time:", e);
+    }
+  };
+
+  const handleRelabel = async (eventId: string, newName: string) => {
+    await api.relabelPaymentEvent(eventId, newName);
     onRefresh();
   };
 
@@ -217,6 +285,13 @@ export function PaymentEventsTable({ events, onRefresh }: Props) {
           event={linkEvent}
           onSave={(subId) => handleLink(linkEvent.event_id, subId)}
           onClose={() => setLinkEvent(null)}
+        />
+      )}
+      {relabelEvent && (
+        <RelabelModal
+          event={relabelEvent}
+          onSave={(newName) => handleRelabel(relabelEvent.event_id, newName)}
+          onClose={() => setRelabelEvent(null)}
         />
       )}
 
@@ -248,6 +323,8 @@ export function PaymentEventsTable({ events, onRefresh }: Props) {
                 ev={ev}
                 onLink={() => setLinkEvent(ev)}
                 onUnlink={() => handleUnlink(ev.event_id)}
+                onMarkOneTime={() => handleMarkOneTime(ev.event_id)}
+                onRelabel={() => setRelabelEvent(ev)}
               />
             ))}
           </tbody>
