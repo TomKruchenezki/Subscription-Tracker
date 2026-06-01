@@ -1,5 +1,23 @@
 # Development Roadmap
 
+> **Phase history (authoritative status).** For current status/tests read `docs/CURRENT_STATE.md`;
+> for the next task read `docs/NEXT_STEPS.md`. The prose below (Phases 0–3) is the original
+> milestone design and is partly historical — the table is the source of truth for status.
+
+| Phase | Description | Status |
+|---|---|---|
+| 0 | Repo scaffold | Complete |
+| 1 | Mock data + local detection engine | Complete |
+| 2 | Gmail OAuth integration (read-only) | Complete |
+| 3.0 | HTML body extraction fixes | Complete |
+| 3.1 | payment_events + native currency + subscription linking | Complete |
+| 3.3B | payment_events semantics + GET /api/payment-events + PaymentEventsTable + billing cycle fix | Complete |
+| 3.4 | Provider expansion (Wolt+, Apple Music), manual CRUD, review queue UX, custom scan range, needs_attachment_review | Complete |
+| 3.5 | User corrections (persist dismiss/reject), reprocessing mode, scan checkpoint, multi-account scanning | Complete |
+| 3.6 | Explainability (decision_reason / evidence / missing / suggested), per-row detection_state, correction-awareness, account aliases | Complete |
+| 3.7 | Safe PDF/attachment receipt parsing — transient extraction (pdfminer.six), structured-only persistence, correction-aware | Complete |
+| Future | Provider-specific PDF parsers, OCR, full multi-account UI, AI parsing, bank integration, Outlook/IMAP | Not planned |
+
 ---
 
 ## Phase 0: Repository Foundation (Complete)
@@ -21,7 +39,7 @@ understand the full intended system.
 
 ---
 
-## Phase 1: Mock Data + Local Detection Engine (Current)
+## Phase 1: Mock Data + Local Detection Engine (Complete)
 
 **Goal:** Build a fully working detection and display pipeline that runs entirely on
 synthetic mock data. No Gmail API calls. This phase proves the detection logic works

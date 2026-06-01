@@ -1,64 +1,50 @@
-# Next Steps — Phase 3 Roadmap
+# Next Steps
 
-Do not implement any phase before the previous one is validated
-(forensic scan run, amounts confirmed, tests passing).
-
----
-
-## Phase 3.1 — payment_events Table + Event-to-Subscription Linking
-
-**Prerequisite:** Run forensic + 1y scan after Phase 3.0. Confirm
-Google/Spotify/Zoom transition from UNKNOWN → ACTIVE with correct amounts.
-
-**Goal:** Introduce a `payment_events` table that records individual payment
-occurrences separate from the latest subscription state. Enables:
-- Confirmed total paid per subscription
-- One-time vs recurring classification
-- Richer payment history without bloating `email_records`
-
-**Key constraints:**
-- `product-architect` must approve the schema before any migration is written
-- `privacy-security-reviewer` gate required before any new column is created
-- No raw body, no raw subject, no sender address stored in payment_events
-
-**Proposed fields:**
-`payment_event_id`, `subscription_id`, `source_message_id` (hash only),
-`amount`, `currency`, `payment_date`, `event_type`, `confidence_score`, `created_at`
+Short and actionable. For full status read `docs/CURRENT_STATE.md`; for phase history read
+`docs/ROADMAP.md`.
 
 ---
 
-## Phase 3.2 — Provider-Specific Parsers
+## Current status
 
-**Prerequisite:** Phase 3.1 complete and validated.
+**Phase 3.7 complete** — safe PDF/attachment receipt parsing (transient extraction, structured-only
+persistence, correction-aware). 579 tests pass / 1 skipped; privacy gate green; TypeScript clean.
+Validated with **synthetic PDF fixtures only** — not yet against a real Gmail account.
 
-**Goal:** Extract product names and plan variants from email body_text for providers
-where the canonical name is too generic:
+## Recommended next task (exact)
 
-| Provider | Problem | Goal |
-|----------|---------|------|
-| Google Play | Canonical name is "Google", not actual product | Extract "Google One", "YouTube Premium", etc. |
-| Spotify | "Premium Student", "Family" variants not distinguished | Extract plan type from subject/body |
-| Zoom | "Payment Processed" subject → no billing cycle | Extract cycle from body_text |
-| Substack | Billing vs newsletter content | Suppress non-billing Substack emails |
+**Validate Phase 3.7 against a real Gmail account.** Connect Gmail, run a forensic scan (e.g. 2y),
+then use the `real-scan-triage` skill + `docs/REAL_GMAIL_SCAN_VALIDATION.md`. Confirm:
 
-**Key constraints:**
-- `product_name` column on subscriptions needs product-architect + privacy gate
-- Body text always ephemeral — parsing in the `_fetch_body()` chain only, never stored
-- Each provider requires dedicated mock fixtures + parametrized tests before implementation
+- An email whose amount is only in a PDF invoice now shows the amount (ReviewQueue 📎 → details).
+- `email_attachments` / `attachment_extracted_fields` populate; **no raw PDF text stored**.
+- `python scripts/validation_report.py` → "ATTACHMENT / PDF COVERAGE" section looks sensible.
+- A PDF receipt with no recurring evidence is **not** auto-confirmed; a refund PDF is not a charge.
+- Mark a PDF-derived event one-time → reprocess → it is not recreated as a subscription.
 
----
+- **Likely files:** `backend/sources/gmail.py`, `backend/parser/pdf_extractor.py`,
+  `backend/detector/detector.py`, `scripts/validation_report.py`.
+- **Likely tests:** `tests/unit/test_pdf_extractor.py`, `test_detector_pdf.py`,
+  `test_pdf_corrections.py`, `tests/privacy/`.
 
-## Phase 3.3 — Attachment/PDF Parsing (Billing Candidates Only)
+## Top known product gaps
 
-**Prerequisite:** Phase 3.2 complete; body_text extraction proven robust across
-providers.
+1. **Real-scan validation of PDF extraction** is pending (the task above).
+2. **Timezone display** — timestamps are stored/processed in **UTC**; user-facing display timezone
+   (Asia/Jerusalem) is not handled, so dates may render in UTC. Verify current behavior, then decide
+   and implement a display timezone. (Display-only; do not change stored values.)
+3. **Provider-specific PDF parsers** — extraction is generic; unusual invoice layouts yield `NO_FIELDS`.
+4. **Image/scanned PDFs** are not OCR'd (text-based PDFs only).
+5. **Full multi-account selector UI** — backend scans all accounts; there is no per-account UI.
+6. **Precision/recall backlog** — one-time purchases leaking into the Review Queue, confidence
+   calibration for known services stuck as FLAGGED. See the backlog in `docs/REAL_GMAIL_SCAN_VALIDATION.md`.
 
-**Goal:** For emails where body_text yields no amount but a PDF attachment is present
-(e.g., invoice-style billing emails), parse the first page ephemerally for amount/cycle.
+## Not scheduled (need explicit re-scoping)
 
-**Key constraints:**
-- Binary parsing dependencies (pdfminer or PyMuPDF) require privacy-security-reviewer approval before adding to requirements.txt
-- `attachments.get()` is within `gmail.readonly` scope but needs explicit privacy review of the extraction pipeline
-- Parsing is strictly ephemeral — raw bytes discarded immediately after extraction, never logged
-- Scope-limited to emails already DETECTED or high-confidence FLAGGED (score ≥ 0.60)
-- Only first page of first attachment is read — no multi-page, no embedded images
+AI/LLM-assisted parsing (deterministic-first rule), bank integration, Outlook/IMAP. See `docs/ROADMAP.md`.
+
+## Before starting any feature
+
+- Run the `start-session` skill to confirm state.
+- Mock data first for detection changes; the privacy gate must stay green.
+- Anything touching auth/schema/sources/API/dependencies → `privacy-security-reviewer` gate.

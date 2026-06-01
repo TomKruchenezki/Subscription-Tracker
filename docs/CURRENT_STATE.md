@@ -114,6 +114,9 @@
 
 ## Known Problems
 
+- **Timezone (display):** timestamps are stored/processed in **UTC**; the UI does not convert to a
+  user-facing timezone (e.g. Asia/Jerusalem), so dates may render in UTC. Display-only issue —
+  stored values are correct. Verify current behavior, then decide/implement a display timezone.
 - Review Queue "Show all" (local view) button only resets local dismissed state — persisted dismissals in DB remain (need separate UI to un-dismiss if desired)
 - Multi-account scanning fetches all accounts' IDs but uses the first account's source for metadata/body fetch. If a message ID belongs to a second account, fetch may fail silently. Full per-account routing needs phase 3.6.
 - Google/Spotify/Zoom may show UNKNOWN until a forensic scan is run with Phase 3.3B+3.4 fixes applied

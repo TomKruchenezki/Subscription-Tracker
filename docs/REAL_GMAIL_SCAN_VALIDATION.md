@@ -5,6 +5,27 @@ Compare results against the Pre-Scan Checklist and note any false positives, fal
 
 **Privacy reminder:** Never paste email subjects or sender addresses into this file. Record service names and scan statistics only.
 
+**How to triage:** after a scan, run `python scripts/validation_report.py` and use the
+`real-scan-triage` skill to structure findings (account visibility, false positives, one-time
+leakage, processor-vs-merchant confusion, missing amount/currency/cycle, weak cycle inference).
+
+---
+
+## Phase 3.7 — Attachment / PDF checks (forensic mode)
+
+Forensic scans now parse PDF invoices/receipts transiently. After a forensic scan, additionally verify:
+
+- `validation_report.py` shows an **"ATTACHMENT / PDF COVERAGE"** section with non-zero parsed
+  PDFs if your mailbox has invoice attachments.
+- An email whose amount is **only** in a PDF now shows the amount (ReviewQueue 📎 → "View
+  attachment details"); `email_attachments` + `attachment_extracted_fields` have rows.
+- **Privacy:** no raw PDF text is stored — `attachment_extracted_fields` holds structured fields +
+  coded reason tokens only. `pytest tests/privacy/ -q` stays green.
+- A PDF **receipt with no recurring evidence** is NOT auto-confirmed; a **refund** PDF is not
+  treated as a charge.
+- Mark a PDF-derived event one-time → `python scripts/reprocess_email_records.py` → it is not
+  recreated as a subscription.
+
 ---
 
 ## Pre-Scan Checklist

@@ -54,6 +54,10 @@ out/
 *.log
 logs/
 
+# === Saved reports (validation_report.py output etc.) ===
+# Kept out of git per docs/CONTEXT_MANAGEMENT.md — may contain scan data.
+reports/
+
 # === IDE ===
 .vscode/
 .idea/

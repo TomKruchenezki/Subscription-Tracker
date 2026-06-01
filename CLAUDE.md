@@ -5,15 +5,30 @@ by reading Gmail metadata (sender, subject, date) and — in forensic mode only 
 parsing email bodies and PDF attachments in memory. No raw body, snippet, or PDF text is
 ever stored. All data stays in a local SQLite file. No cloud sync, no bank access, no telemetry.
 
-**Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)  
-**Current phase:** Phase 3.7 complete — safe PDF/attachment receipt parsing (transient extraction, structured-only persistence, correction-aware). See `docs/CURRENT_STATE.md`.
+**Tech stack:** Python 3.11+ / FastAPI / SQLite (backend) · Next.js (frontend dashboard)
+**Current phase & status:** see `docs/CURRENT_STATE.md` (phase, test count, known problems, verification commands).
+**What to do next:** see `docs/NEXT_STEPS.md`.
+
+---
+
+## Session Startup Protocol
+
+On a new session, do NOT infer project state from chat history. Instead:
+
+1. Read only: `CLAUDE.md`, `docs/CURRENT_STATE.md`, `docs/NEXT_STEPS.md`, `docs/PRIVACY_SECURITY.md`.
+2. Summarize the current state in ~10 bullets.
+3. Ask which task to continue.
+4. **Do not scan the whole repo** — read more files only when the chosen task requires them
+   (use Grep/Glob to locate; Read only what's needed).
+
+The `start-session` skill automates steps 1–3.
 
 ---
 
 ## Non-Negotiable Rules
 
-These rules cannot be overridden by any agent, developer, or user request. Violations
-must be surfaced immediately and block all other work.
+These cannot be overridden by any agent, developer, or user request. Surface violations
+immediately; they block all other work.
 
 | # | Rule |
 |---|---|
@@ -23,232 +38,105 @@ must be surfaced immediately and block all other work.
 | 4 | **No bank integration code of any kind.** No Plaid, Teller, scraping, or bank credentials. |
 | 5 | **No external data transmission.** No analytics SDKs, no error-reporting services. |
 | 6 | **`tests/privacy/` must never fail.** Failing privacy tests block all other work. |
-| 7 | **Mock data first.** No live Gmail API calls until Phase 1 tests pass at 90%+ coverage. (Phase 1 constraint — lifted at Phase 2 gate. See ROADMAP.md.) |
-| 8 | **Deterministic rules first.** No AI/LLM detection until deterministic rules are documented, tested, and shown to be insufficient. (MVP constraint — see ROADMAP.md Future section.) |
-
----
-
-## Agent Routing Table
-
-Invoke the appropriate subagent for each task type. When in doubt, invoke
-`privacy-security-reviewer` as the first step.
-
-| Task | Agent |
-|---|---|
-| Product scope, user stories, feature approval, new data fields | `product-architect` |
-| ANY auth/schema/data-collection/API/dependency change (mandatory gate) | `privacy-security-reviewer` |
-| payment_events quality, currency correctness, one-time vs recurring, refund handling | `payment-data-quality-reviewer` |
-| Gmail API calls, OAuth flow, token storage, rate limiting | `gmail-integration-specialist` |
-| Subject line parsing, amount extraction, sender resolution, cycle detection | `email-parser-specialist` |
-| Detection rules, confidence scoring, sender domain list, categorization | `subscription-detection-specialist` |
-| Test design, mock fixtures, coverage analysis, privacy test coverage | `qa-test-reviewer` |
-
-**Adding a new subscription service** (e.g., a new streaming service) requires BOTH:
-- `subscription-detection-specialist` — Tier 1/2 classification in `sender_list.py`
-- `email-parser-specialist` — canonical name mapping in `sender_resolver.py`
-
-**Schema change authority:** `product-architect` approves the *value* (is this field worth
-collecting?). `privacy-security-reviewer` approves the *safety* (is this field safe to store?).
-Both approvals are required for any new `email_records` or `subscriptions` column.
-
-**`privacy-security-reviewer` is always invoked after any change to:**
-- `backend/auth/`
-- `backend/sources/`
-- `backend/db/` (schema changes)
-- `backend/api/` (new endpoints)
-- `requirements.txt` (new dependencies)
-
----
-
-## Development Phases
-
-| Phase | Description | Status |
-|---|---|---|
-| 0 | Repo scaffold | Complete |
-| 1 | Mock data + local detection engine | Complete |
-| 2 | Gmail OAuth integration (read-only) | Complete |
-| 3.0 | HTML body extraction fixes | **Complete** |
-| 3.1 | payment_events + native currency + subscription linking | **Complete** |
-| 3.3B | payment_events semantics + GET /api/payment-events + frontend PaymentEventsTable + billing cycle fix | **Complete** |
-| 3.4 | Provider expansion (Wolt+, Apple Music disambiguation), manual CRUD, review queue UX, custom scan range, needs_attachment_review flag | **Complete** |
-| 3.5 | User corrections (persist dismiss/reject), reprocessing mode, scan checkpoint, multi-account scanning | **Complete** |
-| 3.6 | Explainability (decision_reason / evidence / missing / suggested action), per-row detection_state, correction-awareness (relabel / reject / one-time persist across reprocess), account aliases | **Complete** |
-| 3.7 | Safe PDF/attachment receipt & invoice parsing — transient extraction (pdfminer.six), structured-only persistence (`email_attachments`, `attachment_extracted_fields`), correction-aware | **Complete** |
-| Future | AI parsing, bank integration, Outlook/IMAP, provider-specific parsers, full multi-account UI | Not planned |
-
-**When a phase completes:** Update the Status column above and the **Current phase**
-line at the top of this file. Also update `docs/CURRENT_STATE.md` with the new test
-count, scan results, and known problems.
-
----
-
-## File Layout Reference
-
-```
-subscription-tracker/
-  CLAUDE.md                      ← you are here
-  README.md                      ← developer setup guide
-  .env.example                   ← all env vars with comments
-  .gitignore
-
-  docs/
-    PRODUCT_SPEC.md              ← user stories, MVP scope, non-goals
-    ROADMAP.md                   ← phases and exit criteria
-    PRIVACY_SECURITY.md          ← data handling policy, threat model
-    GMAIL_API_PLAN.md            ← OAuth flow, fetching strategy
-    DATA_MODEL.md                ← SQLite schema (4 tables)
-    DETECTION_RULES.md           ← confidence scoring, pattern library
-    TEST_PLAN.md                 ← test hierarchy, fixture design rules
-    FUTURE_BANK_INTEGRATION.md   ← post-MVP design stub
-
-  .claude/agents/
-    product-architect.md
-    privacy-security-reviewer.md
-    payment-data-quality-reviewer.md
-    gmail-integration-specialist.md
-    email-parser-specialist.md
-    subscription-detection-specialist.md
-    qa-test-reviewer.md
-
-  .claude/skills/
-    phase-plan/SKILL.md          ← planning skill: diagnose → scope → tests → stop
-    scan-diagnosis/SKILL.md      ← analyze validation_report output and scan results
-    privacy-review/SKILL.md      ← privacy checklist for payment_events + new tables
-
-  backend/                       ← Phase 1+ (does not exist yet)
-    sources/                     ← mock.py, gmail.py, factory.py
-    parser/                      ← amount_extractor.py, sender_resolver.py, cycle_detector.py
-    detector/                    ← confidence_scorer.py, sender_list.py, pattern_library.py, detector.py
-    auth/                        ← oauth.py, token_store.py
-    db/                          ← setup.py, migrations/
-    api/                         ← FastAPI routers
-    utils/                       ← retry.py
-
-  frontend/                      ← Phase 1+ Next.js dashboard
-    src/
-      app/                       ← Next.js App Router pages
-      components/                ← dashboard, subscription list, review queue
-
-  data/
-    mock/                        ← mock_emails.json, expected_detections.json
-
-  tests/
-    privacy/                     ← build gate — must always pass
-    unit/
-    integration/                 ← requires --integration flag
-
-  conftest.py                    ← --integration flag, db_path fixture
-  pytest.ini                     ← markers: integration, slow
-  main.py                        ← app entry point (python main.py --mock)
-  requirements.txt               ← pinned Python dependencies
-  .github/workflows/ci.yml       ← privacy tests + pip-audit on every push
-```
-
----
-
-## Workflow Rules
-
-**Starting new features:**
-1. Confirm the feature is in scope — invoke `product-architect` if uncertain
-2. Start in mock mode — prototype against `data/mock/` before live data
-3. Write privacy tests and interface tests before implementation
-4. Invoke `privacy-security-reviewer` after implementing any auth or storage code
-
-**Detection rule changes:**
-1. Update `docs/DETECTION_RULES.md` first
-2. Add mock fixture + expected outcome
-3. Add parametrized test case
-4. Then implement the code
-
-**Before every commit:**
-- Run `pytest tests/privacy/` — must pass at 100%
-- Every PR description must answer: "What data does this change collect, store, or transmit?"
-
-**After every phase completes:** Update `docs/CURRENT_STATE.md` with:
-- What changed (new tables, bug fixes, new features)
-- Current known problems
-- Latest test count and pass/fail status
-- Next recommended phase
-- Exact verification commands (privacy gate, full suite, validation report command)
-
-**User-visible acceptance criteria (required for every product feature):**
-Every feature must specify where the user sees it in the app. If a backend change is
-intentionally backend-only (e.g., a schema migration or internal refactor), state that
-explicitly and confirm with the user. "The validation report shows it" is not sufficient
-unless the feature is explicitly scoped as backend-only.
-
-**Product acceptance gate (required before marking a phase complete):**
-Before closing any phase, answer all four:
-1. What changed for the user? (be specific — which screen/section)
-2. Which API endpoint or UI component exposes it?
-3. How can the user verify it without running a script or reading code?
-4. Is `validation_report.py` the only visible evidence? If yes, is that accepted scope?
-
-**No invisible feature completion:**
-A phase is not complete if its new capability exists only in backend code, the DB schema,
-or `validation_report.py` output — unless the phase was explicitly scoped as backend-only
-and the user confirmed that scope before implementation began. Invoke `product-acceptance-reviewer`
-before marking any feature-phase done.
-
-**Detection features must be explainable and correctable:**
-A detection feature is not complete unless the user can (1) see *why* an item was
-detected/flagged (`decision_reason`, `evidence_summary`), (2) see *what is missing*
-(`missing_evidence`), (3) see *what to do* (`suggested_action`), and (4) correct false
-positives/negatives — with corrections persisting across future scans and reprocessing.
-
-**Attachment/PDF detection** specifically is not complete unless: the user can see *why*
-the attachment mattered; can correct the detected provider/product/status; **raw PDF text
-is never stored** (only structured fields + coded reason tokens); and reprocessing respects
-the user's correction.
+| 7 | **Mock data first** for new detection work — prototype against `data/mock/` before live Gmail. |
+| 8 | **Deterministic rules first.** No AI/LLM detection until deterministic rules are documented, tested, and shown insufficient. |
 
 ---
 
 ## Context Budget Modes
 
-Choose the mode that matches the task. Do not default to minimal-read mode for
-architectural work — shallow context produces bad plans.
+Pick the mode that fits the task. Do not default to minimal-read for architectural work —
+shallow context produces bad plans. **Never scan the whole repo by default.**
 
-### NORMAL mode
-Use for: targeted bug fixes, adding patterns, updating tests, small UI tweaks.
-- Read `docs/CURRENT_STATE.md` first — it has phase, test count, known problems, and
-  verification commands. Do not infer project state from other files.
-- Then read only files directly relevant to the task. Use Grep/Glob to locate; Read only what is needed.
-- Targeted tests first (`python -m pytest tests/unit/test_<module>.py -q`). Full suite once at the end.
-- TypeScript check only when `.tsx`/`.ts` files were changed.
-- Use Plan Mode for any change touching > 2 files or requiring architectural decisions.
-- No implementation before explicit ExitPlanMode approval. "Sounds good" is not approval.
-- Keep summaries concise: 3–5 bullet points. No verbatim plan recap.
+**NORMAL** — bug fixes, adding patterns, test/UI tweaks, small changes.
+- Read `docs/CURRENT_STATE.md` first; then only files directly relevant (Grep/Glob to locate).
+- Targeted tests first; full suite once at the end. `tsc --noEmit` only if `.ts/.tsx` changed.
+- Plan Mode for any change touching > 2 files or needing architectural decisions.
+- No implementation before explicit ExitPlanMode approval ("sounds good" is not approval).
 
-### DEEP ARCHITECTURE mode
-Use for: payment_events, subscription linking, multi-account scanning, provider parsers,
-PDF parsing, new migrations, or any change touching > 3 files or > 1 subsystem.
-- Read all genuinely relevant backend + schema + test files for the area being changed.
-- **Depth is preferred over token savings.** A correct plan is worth the extra reads.
-- Still avoid files unrelated to the change (unrelated auth, unrelated routers, frontend when backend-only, etc.).
-- Always use Plan Mode. Always run the full test suite at the end.
+**DEEP ARCHITECTURE** — payment_events, subscription linking, multi-account, parsers, PDF,
+new migrations, or any change touching > 3 files / > 1 subsystem.
+- Read all genuinely relevant backend + schema + test files for the area. Depth > token savings.
+- Always Plan Mode; always full suite at the end.
 
-### NEVER mode (always active, overrides everything)
-Never read or print, under any circumstances:
-- `.env`, `.env.local`, any file containing secrets or tokens
-- Raw email bodies, raw HTML, snippets, or OAuth token values
-- Raw DB row contents that include user PII
-- Binary files, images, or media unless explicitly asked by the user
+**NEVER mode (always active, overrides everything)** — never read or print:
+- `.env`, `.env.local`, any file with secrets or tokens
+- Raw email bodies, raw HTML, snippets, raw PDF text, or OAuth token values
+- Raw DB rows containing user PII
+- Binary files, images, or media unless explicitly asked
+
+---
+
+## Routing
+
+Invoke a specialist when the task calls for that gate or the user asks. When in doubt about
+privacy, invoke `privacy-security-reviewer` first. (Detailed routing rules: `docs/ARCHITECTURE.md`.)
+
+| Task | Use |
+|---|---|
+| Start a session lean | skill `start-session` |
+| Hand off before `/clear` / end of task | skill `handoff-summary` |
+| Run tests without flooding context | skill `test-and-report` |
+| Prepare a safe commit | skill `git-safe-commit` |
+| Triage a real Gmail scan | skill `real-scan-triage` (or `scan-diagnosis` for report parsing) |
+| Plan an architecture phase | skill `phase-plan` |
+| ANY auth/schema/data/API/dependency change (mandatory) | agent `privacy-security-reviewer` |
+| Product scope / new data field | agent `product-architect` |
+| payment_events quality, currency, one-time vs recurring, refunds | agent `payment-data-quality-reviewer` |
+| Gmail / OAuth / rate-limit | agent `gmail-integration-specialist` |
+| Amount / sender / cycle parsing | agent `email-parser-specialist` |
+| Detection rules / sender list / scoring | agent `subscription-detection-specialist` |
+| Tests / fixtures / coverage | agent `qa-test-reviewer` |
+| Is a finished feature user-visible? | agent `product-acceptance-reviewer` |
+
+---
+
+## Checklists
+
+**Before commit** (skill `git-safe-commit`):
+- `git status --short`; confirm `.env`, DB files, token files, `node_modules`, `.venv` are NOT staged.
+- `python -m pytest tests/privacy/ -q` passes 100%; run relevant targeted tests.
+- Commit only when the user explicitly approves. Commit/PR body answers: "What data does this collect, store, or transmit?"
+
+**After a task / before `/clear`** (skill `handoff-summary`):
+- Update `docs/CURRENT_STATE.md` (what changed, files, test count, known problems) and
+  `docs/NEXT_STEPS.md` (exact next step). Then tell the user it is safe to `/clear`.
+
+**Test & log discipline** (skill `test-and-report`):
+- Targeted tests first; full suite only at the end. Report pass/fail **counts** + only failing
+  test names and the first relevant traceback. **Never paste full test logs.**
+- For `validation_report.py`: summarize first; save the full report to `reports/` only if needed.
+  Never print raw subjects/senders/PII.
+
+**After a phase completes:** update the phase status in `docs/ROADMAP.md` and the summary in `docs/CURRENT_STATE.md`.
 
 ---
 
 ## What Claude Must Not Do Without Explicit User Approval
 
 - Add any Gmail scope beyond `gmail.readonly`
-- Add any database column in `email_records` storing email content
+- Store raw email body, snippet, HTML, or raw PDF/attachment text in any table
 - Add any new outbound HTTP call to a non-Google service
 - Change the token storage mechanism
-- Import Plaid, Teller, or any bank API client
-- Add AI/LLM-based parsing code
-- Increase the scope of data collected beyond what is in `docs/PRIVACY_SECURITY.md`
-- Store raw email body, snippet, HTML, **or raw PDF/attachment text** in any table
+- Import Plaid, Teller, or any bank API client; add AI/LLM-based parsing code
 - Add a new third-party dependency without a `privacy-security-reviewer` pass + `pip-audit`
+- Increase data collected beyond `docs/PRIVACY_SECURITY.md`
 
-> **Phase 3.7 note:** Downloading attachment **content** via `messages.attachments.get`
-> is now permitted (user-approved), but ONLY inside `_fetch_attachment_bytes()`, ONLY in
-> forensic mode, ONLY transiently — the bytes/text are parsed in memory and discarded.
-> It uses the existing `gmail.readonly` scope (no scope change). Raw PDF text is never stored.
+> Attachment **content** download via `messages.attachments.get` is permitted (user-approved,
+> Phase 3.7) ONLY inside `_fetch_attachment_bytes()`, ONLY in forensic mode, ONLY transiently —
+> bytes/text parsed in memory and discarded. Uses existing `gmail.readonly` scope; raw text never stored.
+
+---
+
+## Where things live
+
+| Need | File |
+|---|---|
+| Current phase, tests, known problems | `docs/CURRENT_STATE.md` |
+| Next task to work on | `docs/NEXT_STEPS.md` |
+| Session hygiene, `/clear`, handoff | `docs/CONTEXT_MANAGEMENT.md` |
+| File layout, data flow, tables, routing detail | `docs/ARCHITECTURE.md` |
+| Acceptance gate, explainable/correctable rules | `docs/PRODUCT_ACCEPTANCE.md` |
+| Privacy policy / threat model | `docs/PRIVACY_SECURITY.md` |
+| Phase history & exit criteria | `docs/ROADMAP.md` |
+| Real Gmail scan validation | `docs/REAL_GMAIL_SCAN_VALIDATION.md` |
